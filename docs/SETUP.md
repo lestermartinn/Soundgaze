@@ -1,6 +1,6 @@
 # Setup Guide
 
-Follow these steps to get the full stack running locally. You will need two terminal tabs: one for the backend, one for the frontend.
+Follow these steps to get the full stack running locally. You will need three terminal tabs: one for the DB, one for the backend, one for the frontend.
 
 ---
 
@@ -10,16 +10,8 @@ Follow these steps to get the full stack running locally. You will need two term
 |---|---|---|
 | Node.js | 18+ | https://nodejs.org |
 | Python | 3.11+ | https://python.org |
-| npm | 9+ | Bundled with Node |
+| Docker Desktop | any | https://docker.com |
 | git | any | https://git-scm.com |
-
-Verify you're good before starting:
-
-```bash
-node -v
-python3 --version
-npm -v
-```
 
 ---
 
@@ -32,10 +24,48 @@ cd Hacklytics
 
 ---
 
-## 2. Backend (FastAPI) — Terminal 1
+## 2. Get the dataset
+
+The Spotify CSV is not in the repo (too large). Get `spotify_songs.csv` from a teammate and place it at:
+
+```
+backend/data/spotify_songs.csv
+```
+
+Create the folder if it doesn't exist:
 
 ```bash
-cd backend
+mkdir -p backend/data
+```
+
+---
+
+## 3. Install the Actian VectorAI DB Python client
+
+The client `.whl` is not on PyPI — install it manually once:
+
+```bash
+git clone https://github.com/hackmamba-io/actian-vectorAI-db-beta
+pip install actian-vectorAI-db-beta/actiancortex-0.1.0b1-py3-none-any.whl
+```
+
+---
+
+## 4. Start the vector DB — Terminal 1
+
+```bash
+cd Hacklytics/backend
+docker compose up -d
+```
+
+The DB runs as a Docker container on `localhost:50051`. Data is persisted to `backend/data/` so it survives restarts.
+
+---
+
+## 5. Backend (FastAPI) — Terminal 2
+
+```bash
+cd Hacklytics/backend
 
 # Create and activate a virtual environment
 python3 -m venv .venv
@@ -49,40 +79,44 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-The API will be live at `http://localhost:8000`.
-Interactive API docs (Swagger UI): `http://localhost:8000/docs`.
+**First run only:** on startup the server detects an empty DB and automatically ingests `spotify_songs.csv` — cleaning, scaling, and uploading all ~28,000 tracks. This takes about 60 seconds. You'll see batch logs like:
 
-> **Tip:** The `--reload` flag automatically restarts the server when you save a Python file.
+```
+INFO: Batch 1/57 -- upserted 500 tracks.
+INFO: Batch 2/57 -- upserted 500 tracks.
+...
+INFO: Ingest complete -- DB now contains 28356 vectors.
+```
+
+Every subsequent startup skips ingest instantly since the DB is already populated.
+
+The API will be live at `http://localhost:8000`.
+Interactive docs (Swagger UI): `http://localhost:8000/docs`.
 
 ---
 
-## 3. Frontend (Next.js) — Terminal 2
+## 6. Frontend (Next.js) — Terminal 3
 
 ```bash
-cd frontend
-
-# Install JavaScript dependencies
+cd Hacklytics/frontend
 npm install
-
-# Start the dev server
 npm run dev
 ```
 
 The app will be live at `http://localhost:3000`.
 
-> Next.js is configured to proxy all `/api/py/*` requests to `localhost:8000`, so no CORS setup is needed.
+> Next.js proxies all `/api/py/*` requests to `localhost:8000` — no CORS setup needed.
 
 ---
 
-## 4. Verify everything is working
+## 7. Verify everything is working
 
-1. Open `http://localhost:3000` in your browser.
-2. The **dot** next to the app name in the header shows backend status:
-   - 🟡 Pulsing yellow → still checking
-   - 🟢 Green → backend connected
-   - 🔴 Red → backend unreachable (make sure step 2 is running)
-3. Click any point in the 3D cloud — a "Topological Twins" panel should appear on the right.
-4. You can also hit the backend directly:
+1. Open `http://localhost:3000`.
+2. The dot next to the app name in the header shows backend status:
+   - Yellow pulsing → still checking
+   - Green → backend connected
+   - Red → backend unreachable (check step 5)
+3. Hit the backend directly to confirm:
    ```bash
    curl http://localhost:8000/health
    # → {"status":"ok","version":"0.1.0"}
@@ -90,63 +124,30 @@ The app will be live at `http://localhost:3000`.
 
 ---
 
-## File Structure
-
-```
-Hacklytics/
-│
-├── docs/
-│   └── SETUP.md                  ← you are here
-│
-├── README.md                     High-level project overview + API reference
-│
-├── frontend/                     Next.js 14 (App Router) + TypeScript
-│   ├── next.config.js            Proxy /api/py/* → localhost:8000
-│   ├── tailwind.config.ts        Custom design tokens (colors, fonts)
-│   ├── postcss.config.js         Wires Tailwind into the build
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── app/
-│       ├── layout.tsx            Root HTML shell
-│       ├── globals.css           Tailwind directives + base styles
-│       ├── page.tsx              Home page — health check + recommendation sidebar
-│       └── components/
-│           └── PointCloudViewer.tsx   Three.js canvas (1k placeholder points, OrbitControls, click handler)
-│
-└── backend/                      FastAPI (Python)
-    ├── main.py                   All API routes (/health, /songs/embed, /songs/recommend)
-    ├── models.py                 Pydantic data models — 12-D AudioFeatures, EmbeddedPoint, request/response shapes
-    ├── similarity.py             Cosine similarity search (brute-force placeholder)
-    ├── mapping.py                UMAP 3-D projection (placeholder — real code commented in)
-    └── requirements.txt          Python dependencies
-```
-
-### Key concepts
-
-| Piece | What it does |
-|---|---|
-| `PointCloudViewer.tsx` | Renders the 3D star-field using `@react-three/fiber`. Each point is a song. Click a point → fires `onPointClick(songId)` up to the page. |
-| `page.tsx` | Orchestrates the UI: checks backend health on load, listens for point clicks, fetches recommendations, and shows the sidebar. |
-| `main.py` | The single FastAPI entrypoint. All routes live here and delegate to `similarity.py` / `mapping.py`. |
-| `models.py` | The 12 Spotify audio features (`tempo`, `energy`, `valence`, etc.) are defined here as a Pydantic model with a `.to_vector()` helper. |
-| `mapping.py` | Will call UMAP to squish 12-D audio vectors into (x, y, z). Currently returns random coordinates — uncomment the real block when ready. |
-| `similarity.py` | Brute-force cosine similarity. Returns the top-k nearest songs. Swap with FAISS for scale. |
-
----
-
 ## Common Issues
 
-**`ModuleNotFoundError` on backend start**
-Make sure your virtual environment is activated (`source .venv/bin/activate`) before running `uvicorn`.
+**DB container won't start**
+Make sure Docker Desktop is running. Then:
+```bash
+cd backend && docker compose up -d
+```
 
-**Red dot / backend unreachable on frontend**
-Confirm the backend is running on port 8000. Check for port conflicts:
+**`ModuleNotFoundError: cortex`**
+The `.whl` wasn't installed. See step 3.
+
+**`ModuleNotFoundError` on any other package**
+Make sure your venv is activated: `source .venv/bin/activate`
+
+**Ingest fails with `FileNotFoundError`**
+`data/spotify_songs.csv` is missing. See step 2.
+
+**Red dot / backend unreachable**
+Check the backend is running on port 8000:
 ```bash
 lsof -i :8000
 ```
 
-**`npm install` fails on `umap-learn` / native modules**
-`umap-learn` is a Python package — it goes in the backend, not the frontend. Run `pip install -r requirements.txt` inside the `backend/` folder with the venv active.
-
-**Three.js canvas is blank**
-Open the browser console. A common cause is React strict mode double-mounting — this is normal in dev and harmless.
+**Want to wipe and re-ingest the DB:**
+```bash
+FORCE_REINGEST=true uvicorn main:app --reload --port 8000
+```
