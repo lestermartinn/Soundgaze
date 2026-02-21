@@ -91,6 +91,49 @@ class RecommendResponse(BaseModel):
     )
 
 
+class SongSampleItem(BaseModel):
+    track_id: str
+    name: str | None = None
+    artist: str | None = None
+    genre: str | None = None
+    user_id: str | None = None
+    user_ids: list[str] = Field(default_factory=list)
+
+
+class SongPoolRequest(BaseModel):
+    user_id: str | None = Field(None, description="Optional app user id to fetch personal songs")
+    user_song_count: int = Field(100, ge=0, le=1000, description="Target personal songs when user_id is provided")
+    total_count: int = Field(1000, ge=1, le=5000, description="Total points to return for visualization")
+
+
+class SongPoolResponse(BaseModel):
+    user_songs: list[SongSampleItem]
+    global_songs: list[SongSampleItem]
+    user_songs_returned: int
+    global_songs_returned: int
+    total_returned: int
+    is_new_user: bool
+
+
+class SongUpsertRequest(BaseModel):
+    track_id: str = Field(..., description="Unique song ID")
+    vector: list[float] = Field(..., min_length=11, max_length=11, description="11-D embedding vector")
+    name: str | None = None
+    artist: str | None = None
+    genre: str | None = None
+    user_id: str | None = None
+
+
+class SongGetResponse(BaseModel):
+    track_id: str
+    vector: list[float]
+    name: str | None = None
+    artist: str | None = None
+    genre: str | None = None
+    user_id: str | None = None
+    user_ids: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Bulk embed request
 # ---------------------------------------------------------------------------

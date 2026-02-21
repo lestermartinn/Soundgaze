@@ -96,6 +96,7 @@ def _load_dataset(path: str) -> pd.DataFrame:
 
 _METADATA_COLS = [
     "track_id",
+    "user_id",
     "track_name",
     "track_artist",
     "playlist_genre",
@@ -208,13 +209,21 @@ def _create_payload(features: dict, metadata: dict) -> dict | None:
       "vector"   : list[float]    -- 11-D scaled audio feature vector
     """
     try:
+        track_id = metadata.get("track_id")
+        if pd.isna(track_id):
+            return None
+
+        def normalize(value):
+            return None if pd.isna(value) else value
+
         return {
-            "track_id": metadata["track_id"],
+            "track_id": str(track_id),
             "payload": {
-                "track_id":   metadata["track_id"],
-                "name":       metadata.get("track_name"),
-                "artist":     metadata.get("track_artist"),
-                "genre":      metadata.get("playlist_genre"),
+                "track_id": str(track_id),
+                "user_id": normalize(metadata.get("user_id")),
+                "name": normalize(metadata.get("track_name")),
+                "artist": normalize(metadata.get("track_artist")),
+                "genre": normalize(metadata.get("playlist_genre")),
             },
             "vector": [float(features[col]) for col in _FEATURE_COLS],
         }

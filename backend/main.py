@@ -18,9 +18,16 @@ logging.basicConfig(
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from db import init_db, close_db, search_similar, get_song_vector
+from db import init_db, close_db, search_similar, get_song_vector, sample_song_pool, upsert_song, get_song
 from ingest import ingest_if_needed
-from models import RecommendRequest, RecommendResponse
+from models import (
+    RecommendRequest,
+    RecommendResponse,
+    SongPoolRequest,
+    SongPoolResponse,
+    SongUpsertRequest,
+    SongGetResponse,
+)
 
 
 @asynccontextmanager
@@ -74,13 +81,80 @@ async def recommend(body: RecommendRequest):
     if query_vector is None:
         raise HTTPException(status_code=404, detail=f"Song '{body.song_id}' not found in DB.")
 
-    results = await search_similar(query_vector=query_vector, top_k=body.top_k)
+    candidate_k = min(max(body.top_k * 3, body.top_k + 5), 200)
+    candidates = await search_similar(query_vector=query_vector, top_k=candidate_k)
+
+    filtered: list[dict] = []
+    seen_track_ids: set[str] = set()
+    for item in candidates:
+        track_id = str(item.get("track_id", ""))
+        score = float(item.get("score", 0.0))
+
+        if not track_id or track_id == body.song_id:
+            continue
+        if score >= 1.0:
+            continue
+        if track_id in seen_track_ids:
+            continue
+
+        seen_track_ids.add(track_id)
+        filtered.append(item)
+        if len(filtered) >= body.top_k:
+            break
 
     return RecommendResponse(
         query_id=body.song_id,
-        recommendations=[r["track_id"] for r in results],
-        scores=[r["score"] for r in results],
+        recommendations=[r["track_id"] for r in filtered],
+        scores=[r["score"] for r in filtered],
     )
+
+
+@app.post("/songs/pool", response_model=SongPoolResponse)
+async def song_pool(body: SongPoolRequest):
+    """Return up to 1000 points with new-user fallback.
+
+    - If user_id has songs in DB, include personal songs + random global songs.
+    - If user_id is new or omitted (no Spotify link), return random songs so UI still renders.
+    """
+    sampled = await sample_song_pool(
+        user_id=body.user_id,
+        user_song_count=body.user_song_count,
+        total_count=body.total_count,
+    )
+    return SongPoolResponse(
+        user_songs=sampled["user_songs"],
+        global_songs=sampled["global_songs"],
+        user_songs_returned=len(sampled["user_songs"]),
+        global_songs_returned=len(sampled["global_songs"]),
+        total_returned=len(sampled["user_songs"]) + len(sampled["global_songs"]),
+        is_new_user=bool(sampled["is_new_user"]),
+    )
+
+
+@app.post("/songs", response_model=SongGetResponse)
+async def put_song(body: SongUpsertRequest):
+    """Insert/update a single song in the vector DB and return stored record."""
+    await upsert_song(
+        track_id=body.track_id,
+        vector=body.vector,
+        name=body.name,
+        artist=body.artist,
+        genre=body.genre,
+        user_id=body.user_id,
+    )
+    stored = await get_song(body.track_id)
+    if stored is None:
+        raise HTTPException(status_code=500, detail="Song upsert completed but read-back failed.")
+    return SongGetResponse(**stored)
+
+
+@app.get("/songs/{song_id}", response_model=SongGetResponse)
+async def fetch_song(song_id: str):
+    """Get a single song by track_id."""
+    stored = await get_song(song_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"Song '{song_id}' not found in DB.")
+    return SongGetResponse(**stored)
 
 
 # ---------------------------------------------------------------------------
