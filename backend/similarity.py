@@ -1,9 +1,13 @@
 """
-Similarity module — placeholder for cosine similarity search.
+Similarity module -- superseded by Actian VectorAI DB.
 
-Swap the in-memory brute-force implementation below with a vector database
-(e.g. Pinecone, Weaviate, pgvector) or an ANN library (FAISS, hnswlib)
-before going to production.
+Actian VectorAI DB now handles all nearest-neighbour search via its built-in
+COSINE distance index (HNSW). The high-level call lives in db.search_similar().
+
+This file is kept as a reference / fallback for:
+  - Unit tests that run without the DB container
+  - Understanding the underlying math
+  - Offline / in-memory experimentation
 """
 
 import math
@@ -50,7 +54,8 @@ def find_topological_twins(
     Returns:
         List of SimilarityResult sorted by descending similarity.
 
-    TODO: Replace with FAISS / hnswlib index for O(log n) lookup at scale.
+    NOTE: In production this is replaced by db.search_similar(), which
+    delegates to Actian VectorAI DB's HNSW index for O(log n) lookup.
     """
     results: list[SimilarityResult] = []
 

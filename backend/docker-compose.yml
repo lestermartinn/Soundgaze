@@ -1,0 +1,11 @@
+services:
+  vectoraidb:
+    image: williamimoh/actian-vectorai-db:1.0b
+    platform: linux/amd64   # required on macOS Apple Silicon (Rosetta handles it)
+    container_name: vectoraidb
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./data:/data        # persists DB files between restarts
+    restart: unless-stopped
+    stop_grace_period: 2m
