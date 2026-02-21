@@ -18,7 +18,14 @@ import hashlib
 import logging
 import os
 
-from cortex import AsyncCortexClient, DistanceMetric
+try:
+    from cortex import AsyncCortexClient, DistanceMetric
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "Missing Actian VectorAI client module 'cortex'. "
+        "Install the Actian wheel (not the deprecated PyPI package 'cortex-client'): "
+        "pip install <path-to>/actiancortex-0.1.0b1-py3-none-any.whl"
+    ) from exc
 
 logger = logging.getLogger(__name__)
 
