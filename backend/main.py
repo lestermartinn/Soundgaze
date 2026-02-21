@@ -27,7 +27,10 @@ from models import (
     SongPoolResponse,
     SongUpsertRequest,
     SongGetResponse,
+    SpotifyImportRequest,
+    SpotifySyncResponse,
 )
+from spotify import SpotifyImporter
 
 
 @asynccontextmanager
@@ -157,6 +160,82 @@ async def fetch_song(song_id: str):
     return SongGetResponse(**stored)
 
 
-# ---------------------------------------------------------------------------
-# Add your routes here
-# ---------------------------------------------------------------------------
+@app.post("/songs/spotify/sync", response_model=SpotifySyncResponse)
+async def sync_spotify_library(body: SpotifyImportRequest):
+    """
+    Sync user's top Spotify tracks to local database.
+
+    Fetches up to 50 of the user's most-listened tracks from Spotify,
+    converts their audio features to vectors, and adds them to the database.
+    If a song already exists, the user_id is merged into the user_ids list.
+
+    Args:
+        body.user_id: App user ID to associate with these songs
+        body.access_token: Spotify OAuth access token
+        body.limit: Number of top songs to fetch (default 50)
+
+    Returns:
+        Summary of songs added, merged, and any failures
+    """
+    try:
+        importer = SpotifyImporter(body.access_token)
+        tracks = await importer.get_tracks_with_vectors(limit=body.limit)
+
+        songs_added = 0
+        songs_merged = 0
+        failed_count = 0
+        added_tracks = []
+        merged_tracks = []
+
+        for track in tracks:
+            try:
+                track_id = track["track_id"]
+                vector = track["vector"]
+                name = track["name"]
+                artist = track["artist"]
+
+                # Check if song already exists
+                existing = await get_song(track_id)
+                
+                # Upsert with user_id (handles merge internally)
+                await upsert_song(
+                    track_id=track_id,
+                    vector=vector,
+                    name=name,
+                    artist=artist,
+                    genre=None,  # Spotify doesn't provide genre at track level
+                    user_id=body.user_id,
+                )
+
+                if existing is None:
+                    songs_added += 1
+                    added_tracks.append(track_id)
+                else:
+                    # Check if user was already in the list
+                    existing_user_ids = existing.get("user_ids", [])
+                    if body.user_id not in existing_user_ids:
+                        songs_merged += 1
+                        merged_tracks.append(track_id)
+
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to process track {track.get('track_id', 'unknown')}: {e}")
+                failed_count += 1
+
+        total_processed = len(tracks)
+
+        return SpotifySyncResponse(
+            user_id=body.user_id,
+            songs_added=songs_added,
+            songs_merged=songs_merged,
+            total_processed=total_processed,
+            failed_count=failed_count,
+            added_tracks=added_tracks,
+            merged_tracks=merged_tracks,
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to sync Spotify library: {str(e)}"
+        )
