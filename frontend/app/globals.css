@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    @apply h-full bg-canvas text-primary;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+
+  canvas {
+    display: block;
+  }
+
+  /* Status dot pulse — kept here because it relies on a data-attribute
+     selector that can't be expressed with static Tailwind class names. */
+  .status-dot[data-status="ok"]       { @apply bg-green-400; }
+  .status-dot[data-status="error"]    { @apply bg-red-400; }
+  .status-dot[data-status="checking"] { @apply bg-yellow-400 animate-pulse; }
+}
