@@ -4,13 +4,6 @@ Dataset ingestion -- loads the Spotify dataset into the Actian VectorAI DB.
 Called automatically on startup via main.py lifespan.
 Skipped if the DB is already populated (set FORCE_REINGEST=true to override).
 
-Workflow:
-  1. Check DB count -- skip if already populated
-  2. Load raw CSV from disk into a DataFrame
-  3. Clean the DataFrame (drop unused cols, drop NaN rows)
-  4. Scale features to [0, 1] with MinMaxScaler
-  5. Normalize each row into the shape expected by the DB
-  6. Batch-upsert into Actian VectorAI DB
 """
 
 import logging
@@ -124,6 +117,7 @@ _FEATURE_COLS = [
 
 _KEEP_COLS = _METADATA_COLS + _FEATURE_COLS
 
+# Helper function to fill key if value is -1 (no key detected)
 def _impute_key(df: pd.DataFrame) -> pd.DataFrame:
     """
     Replace key == -1 (undetected) with an imputed integer in [0, 11].
