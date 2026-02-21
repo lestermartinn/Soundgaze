@@ -17,7 +17,6 @@ DB setup (one-time per machine):
 import hashlib
 import logging
 import os
-import random
 
 from cortex import AsyncCortexClient, DistanceMetric
 
@@ -25,8 +24,7 @@ logger = logging.getLogger(__name__)
 
 VECTOR_DB_URL: str = os.getenv("VECTOR_DB_URL", "localhost:50051")
 COLLECTION: str = "songs"
-DIMENSION: int = 12       # must match AudioFeatures.to_vector() length
-SEED_COUNT: int = 1_000   # placeholder vectors inserted on first run
+DIMENSION: int = 11   # must match len(_FEATURE_COLS) in ingest.py
 
 _client: AsyncCortexClient | None = None
 
@@ -68,16 +66,7 @@ async def init_db() -> None:
         )
 
     count = await _client.count(COLLECTION)
-    if count == 0:
-        logger.info("Seeding %d placeholder vectors...", SEED_COUNT)
-        ids = list(range(SEED_COUNT))
-        vectors = [[random.random() for _ in range(DIMENSION)] for _ in range(SEED_COUNT)]
-        payloads = [{"track_id": f"song_{i}"} for i in range(SEED_COUNT)]
-        await _client.batch_upsert(COLLECTION, ids=ids, vectors=vectors, payloads=payloads)
-        await _client.flush(COLLECTION)
-        logger.info("Seed complete.")
-    else:
-        logger.info("Collection already has %d vectors -- skipping seed.", count)
+    logger.info("Collection '%s' ready -- %d vectors stored.", COLLECTION, count)
 
 
 async def close_db() -> None:
@@ -102,11 +91,14 @@ async def close_db() -> None:
 async def search_similar(query_vector: list[float], top_k: int = 5) -> list[dict]:
     """Return top_k songs closest to query_vector by COSINE similarity."""
     client = get_db()
-    results = await client.search(COLLECTION, query=query_vector, top_k=top_k)
+    results = await client.search(COLLECTION, query=query_vector, top_k=top_k, with_payload=True)
     return [
         {
             "track_id": r.payload.get("track_id", str(r.id)),
-            "score": round(r.score, 4),
+            "name":     r.payload.get("name"),
+            "artist":   r.payload.get("artist"),
+            "genre":    r.payload.get("genre"),
+            "score":    round(r.score, 4),
         }
         for r in results
     ]

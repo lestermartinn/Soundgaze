@@ -7,6 +7,11 @@ backend/.venv/
 backend/__pycache__/
 backend/*.pyc
 
+# Actian VectorAI DB volume + dataset files
+backend/data/
+
 # Env files
 .env
 .env.local
+
+

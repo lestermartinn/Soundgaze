@@ -8,7 +8,6 @@ Add your routes below. Use /songs/recommend as a reference for the full pattern:
 """
 
 import logging
-import random
 from contextlib import asynccontextmanager
 
 logging.basicConfig(
@@ -16,18 +15,20 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import init_db, close_db, search_similar, get_song_vector
+from ingest import ingest_if_needed
 from models import RecommendRequest, RecommendResponse
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()   # connects to Actian VectorAI DB, ensures collection, seeds data
+    await init_db()          # connect to DB, ensure collection exists
+    await ingest_if_needed() # load Kaggle dataset if DB is empty
     yield
-    await close_db()  # gracefully closes gRPC connection
+    await close_db()         # gracefully close gRPC connection
 
 
 app = FastAPI(
@@ -71,8 +72,7 @@ async def recommend(body: RecommendRequest):
     query_vector = await get_song_vector(body.song_id)
 
     if query_vector is None:
-        # Dev fallback -- replace with HTTPException(404) once real data is flowing
-        query_vector = [random.random() for _ in range(12)]
+        raise HTTPException(status_code=404, detail=f"Song '{body.song_id}' not found in DB.")
 
     results = await search_similar(query_vector=query_vector, top_k=body.top_k)
 
