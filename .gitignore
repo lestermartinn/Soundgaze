@@ -4,6 +4,7 @@ frontend/.next/
 
 # Python
 backend/.venv/
+backend/venv/
 backend/__pycache__/
 backend/*.pyc
 
@@ -14,4 +15,12 @@ backend/data/
 .env
 .env.local
 
+
+
+# Context files
+HACKLYTICS_CC_CONTEXT.md
+CLAUDE.md
+
+# macOS
+.DS_Store
 

@@ -1,88 +1,214 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import Navbar from "./components/Navbar";
+import MarqueeTicker from "./components/MarqueeTicker";
 import PointCloudViewer from "./components/PointCloudViewer";
+import ControlsOverlay, { ExploreMode } from "./components/ControlsOverlay";
 
-type HealthStatus = "checking" | "ok" | "error";
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-export default function HomePage() {
-  const [backendStatus, setBackendStatus] = useState<HealthStatus>("checking");
-  const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
-  const [recommendations, setRecommendations] = useState<string[]>([]);
+interface SelectedSong {
+  id: string;
+  title?: string;
+  artist?: string;
+  albumArt?: string;
+  culturalDescription?: string;
+  previewUrl?: string;
+}
 
-  // Verify backend connection on mount
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
+export default function ExplorePage() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+
+  const [selectedSong, setSelectedSong] = useState<SelectedSong | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
+
+  // Controls state — Parker wires these into PointCloudViewer once ready
+  const [exploreMode, setExploreMode] = useState<ExploreMode>("manual");
+  const [pointDensity, setPointDensity] = useState(50);
+  void exploreMode;   // suppress unused-var warning until Parker consumes these
+  void pointDensity;
+
+  const isDev = process.env.NODE_ENV === "development";
+
   useEffect(() => {
-    async function checkBackend() {
-      try {
-        const res = await fetch("/api/py/health");
-        setBackendStatus(res.ok ? "ok" : "error");
-      } catch {
-        setBackendStatus("error");
-      }
-    }
-    checkBackend();
-  }, []);
+    if (status === "unauthenticated" && !isDev) router.replace("/landing");
+  }, [status, router, isDev]);
 
-  // Called when the user clicks a point in the 3D cloud
-  async function handlePointClick(songId: string) {
-    setSelectedSongId(songId);
-    setRecommendations([]);
+  // Render nothing while session is resolving or redirect is in flight
+  if (status === "loading") return null;
+  if (status === "unauthenticated" && !isDev) return null;
 
+  // Called by Three.js (Parker) when a point is clicked.
+  // Lester owns this callback — it bridges the canvas to the sidebar.
+  function onSongSelect(songId: string) {
+    setSelectedSong({ id: songId });
+    setSidebarOpen(true);
+
+    // TODO: fetch real song details from GET /api/py/song/{id}/details
+    // For now, populate with placeholder so sidebar renders during development.
+    setSelectedSong({
+      id: songId,
+      title: "Song Title",
+      artist: "Artist Name",
+      culturalDescription: "Cultural and genre context will appear here once the backend is connected.",
+    });
+  }
+
+  function closeSidebar() {
+    setSidebarOpen(false);
+    setSelectedSong(null);
+    setSaveStatus("idle");
+  }
+
+  async function saveToLikedSongs() {
+    if (!selectedSong || !session?.accessToken) return;
+    setIsSaving(true);
+    setSaveStatus("idle");
     try {
-      const res = await fetch("/api/py/songs/recommend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ song_id: songId, top_k: 5 }),
+      const res = await fetch(`https://api.spotify.com/v1/me/tracks`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ids: [selectedSong.id] }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setRecommendations(data.recommendations ?? []);
-      }
-    } catch (err) {
-      console.error("Recommendation fetch failed:", err);
+      setSaveStatus(res.ok ? "saved" : "error");
+    } catch {
+      setSaveStatus("error");
+    } finally {
+      setIsSaving(false);
     }
   }
 
   return (
-    <main className="grid grid-rows-[48px_1fr] h-screen relative overflow-hidden">
-      {/* ── Header ── */}
-      <header className="flex items-center gap-3 px-5 bg-surface border-b border-divider text-[15px] font-semibold tracking-wide">
-        <h1>Hacklytics 2025</h1>
-        <span
-          className="status-dot w-2.5 h-2.5 rounded-full transition-colors duration-300"
-          data-status={backendStatus}
-          title={`Backend: ${backendStatus}`}
-        />
-      </header>
+    <main className="relative w-screen h-screen bg-near-black overflow-hidden flex flex-col">
 
-      {/* ── 3D Viewport ── */}
-      <section className="relative w-full h-full">
-        <PointCloudViewer onPointClick={handlePointClick} />
-      </section>
+      {/* ── Navbar ── */}
+      <Navbar />
 
-      {/* ── Topological Twins sidebar ── */}
-      {selectedSongId && (
-        <aside className="absolute top-[68px] right-5 w-[260px] bg-surface border border-divider rounded-lg p-4 z-10">
-          <h2 className="text-[13px] font-bold tracking-widest uppercase text-accent mb-2.5">
-            Topological Twins
-          </h2>
-          <p className="text-xs text-muted mb-1">
-            Selected: <code className="text-primary font-mono">{selectedSongId}</code>
-          </p>
+      {/* ── Ticker (sits just below navbar) ── */}
+      <MarqueeTicker
+        text="EXPLORE THE UNIVERSE • DISCOVER NEW SOUNDS • SOUNDSCAPE •"
+        variant="black"
+        speed="slow"
+        tilt={0}
+      />
 
-          {recommendations.length === 0 ? (
-            <p className="text-xs text-muted">Loading…</p>
-          ) : (
-            <ul className="flex flex-col gap-1.5 mt-2">
-              {recommendations.map((id) => (
-                <li key={id}>
-                  <code className="text-xs text-primary font-mono">{id}</code>
-                </li>
-              ))}
-            </ul>
-          )}
+      {/* ── Canvas + Sidebar layer ── */}
+      <div className="relative flex-1 overflow-hidden">
+
+        {/* Three.js canvas — Parker mounts into this div */}
+        <div id="canvas-container" className="absolute inset-0 z-0">
+          <PointCloudViewer onPointClick={onSongSelect} />
+        </div>
+
+        {/* ── Sidebar — slides in from right on song select ── */}
+        <aside
+          className={`absolute top-0 right-0 h-full w-80 z-10
+                      bg-off-white border-l-4 border-black
+                      shadow-[-8px_0px_0px_0px_rgba(0,0,0,1)]
+                      transition-transform duration-300 ease-in-out flex flex-col
+                      ${sidebarOpen ? "translate-x-0" : "translate-x-full"}`}
+        >
+          {/* Sidebar header */}
+          <div className="flex items-center justify-between px-4 py-3 bg-black border-b-4 border-black">
+            <span className="font-black text-xs uppercase tracking-widest text-spotify-green">
+              Now Exploring
+            </span>
+            <button
+              onClick={closeSidebar}
+              className="font-black text-white text-lg leading-none hover:text-spotify-green transition-colors"
+              aria-label="Close sidebar"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Sidebar content */}
+          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+            {selectedSong ? (
+              <>
+                {/* Album art placeholder */}
+                <div className="w-full aspect-square bg-black border-4 border-black flex items-center justify-center">
+                  {selectedSong.albumArt ? (
+                    <img
+                      src={selectedSong.albumArt}
+                      alt={selectedSong.title}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-white/20 font-black text-sm uppercase tracking-widest">
+                      No Art
+                    </span>
+                  )}
+                </div>
+
+                {/* Song info */}
+                <div className="border-b-4 border-black pb-3">
+                  <h2 className="font-black text-2xl uppercase leading-tight">
+                    {selectedSong.title ?? selectedSong.id}
+                  </h2>
+                  {selectedSong.artist && (
+                    <p className="font-mono font-bold text-sm text-black/60 mt-1">
+                      {selectedSong.artist}
+                    </p>
+                  )}
+                </div>
+
+                {/* Cultural / genre description (Gemini) */}
+                {selectedSong.culturalDescription && (
+                  <div className="bg-black text-white p-3 border-4 border-black">
+                    <p className="font-mono text-xs leading-relaxed">
+                      {selectedSong.culturalDescription}
+                    </p>
+                  </div>
+                )}
+
+                {/* Save to Liked Songs */}
+                <button
+                  className="w-full neo-btn-primary text-sm mt-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={saveToLikedSongs}
+                  disabled={isSaving || saveStatus === "saved" || !session?.accessToken}
+                >
+                  {isSaving
+                    ? "Saving..."
+                    : saveStatus === "saved"
+                    ? "✓ Saved to Liked Songs"
+                    : saveStatus === "error"
+                    ? "✕ Save Failed — Retry"
+                    : "♥ Save to Liked Songs"}
+                </button>
+              </>
+            ) : (
+              <p className="font-mono text-sm text-black/40 text-center mt-8">
+                Click a point in the universe to explore a song.
+              </p>
+            )}
+          </div>
         </aside>
-      )}
+
+        {/* ── Controls overlay — bottom center ── */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
+          <ControlsOverlay
+            onModeChange={setExploreMode}
+            onDensityChange={setPointDensity}
+          />
+        </div>
+
+      </div>
     </main>
   );
 }

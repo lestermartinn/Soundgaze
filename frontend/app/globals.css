@@ -5,17 +5,50 @@
 @layer base {
   html,
   body {
-    @apply h-full bg-canvas text-primary;
-    font-family: system-ui, -apple-system, sans-serif;
+    @apply h-full;
+    background-color: #0a0a0a; /* near-black */
+    color: #ffffff;
+    font-family: var(--font-syne), sans-serif;
   }
 
   canvas {
     display: block;
   }
 
-  /* Status dot pulse — kept here because it relies on a data-attribute
-     selector that can't be expressed with static Tailwind class names. */
-  .status-dot[data-status="ok"]       { @apply bg-green-400; }
-  .status-dot[data-status="error"]    { @apply bg-red-400; }
+  /* Backend status dot — data-attribute selectors can't use static Tailwind class names.
+     Custom color tokens can't be resolved via @apply, so use raw hex values. */
+  .status-dot[data-status="ok"]       { background-color: #1DB954; } /* spotify-green */
+  .status-dot[data-status="error"]    { @apply bg-red-500; }
   .status-dot[data-status="checking"] { @apply bg-yellow-400 animate-pulse; }
+}
+
+@layer components {
+  /* Neo-brutalist card — white bg, thick black border, offset shadow */
+  .neo-card {
+    @apply border-4 border-black;
+    background-color: #f5f5f5; /* off-white */
+    box-shadow: 8px 8px 0px 0px rgba(0, 0, 0, 1);
+  }
+
+  /* Neo-brutalist button — primary (green) variant */
+  .neo-btn-primary {
+    @apply font-black border-4 border-black px-6 py-3 uppercase tracking-wide
+           transition-all active:translate-x-1 active:translate-y-1;
+    background-color: #1DB954; /* spotify-green */
+    color: #000000;
+    box-shadow: 6px 6px 0px 0px #000;
+  }
+  .neo-btn-primary:hover  { box-shadow: 8px 8px 0px 0px #000; }
+  .neo-btn-primary:active { box-shadow: none; }
+
+  /* Neo-brutalist button — secondary (white outline) variant */
+  .neo-btn-secondary {
+    @apply font-black border-4 border-black px-6 py-3 uppercase tracking-wide
+           transition-all active:translate-x-1 active:translate-y-1;
+    background-color: #f5f5f5; /* off-white */
+    color: #000000;
+    box-shadow: 6px 6px 0px 0px #000;
+  }
+  .neo-btn-secondary:hover  { box-shadow: 8px 8px 0px 0px #000; }
+  .neo-btn-secondary:active { box-shadow: none; }
 }
