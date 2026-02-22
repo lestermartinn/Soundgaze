@@ -480,6 +480,11 @@ async def random_walk_songs(
     scaled_temperature = 0.05 + (temperature * 1.95)
     effective_k = max(2, min(k, int(round(2 + (k - 2) * temperature))))
     search_k = min(max(k * 4, k + 10), 500)
+    exploration_pool_k = max(
+        effective_k,
+        min(search_k, int(round(effective_k + (search_k - effective_k) * temperature))),
+    )
+    exploration_rate = min(0.85, temperature * temperature)
 
     path: list[RandomWalkStep] = [
         RandomWalkStep(
@@ -496,6 +501,7 @@ async def random_walk_songs(
     song_cache: dict[str, dict] = {track_id: seed_song}
     current_track_id = track_id
     current_vector = list(seed_vector)
+    exploratory_steps = 0
 
     for step_idx in range(1, steps + 1):
         restarted = False
@@ -509,6 +515,7 @@ async def random_walk_songs(
 
         candidates: list[dict] = []
         seen_ids: set[str] = set()
+        candidate_limit = search_k
 
         for item in similar:
             candidate_id = str(item.get("track_id", "")).strip()
@@ -521,7 +528,7 @@ async def random_walk_songs(
 
             seen_ids.add(candidate_id)
             candidates.append(item)
-            if len(candidates) >= k:
+            if len(candidates) >= candidate_limit:
                 break
 
         if not candidates:
@@ -536,13 +543,23 @@ async def random_walk_songs(
                     continue
                 seen_ids.add(candidate_id)
                 candidates.append(item)
-                if len(candidates) >= k:
+                if len(candidates) >= candidate_limit:
                     break
 
         if not candidates:
             break
 
-        sampled_pool = candidates[:effective_k]
+        local_pool = candidates[:effective_k]
+        explore_pool_end = min(len(candidates), exploration_pool_k)
+        exploratory_pool = candidates[effective_k:explore_pool_end]
+
+        use_explore_pool = bool(exploratory_pool) and rng.random() < exploration_rate
+        if use_explore_pool:
+            sampled_pool = exploratory_pool
+            exploratory_steps += 1
+        else:
+            sampled_pool = local_pool if local_pool else candidates[:explore_pool_end]
+
         picked = _choose_weighted_candidate(sampled_pool, scaled_temperature, rng)
         next_track_id = str(picked.get("track_id"))
 
@@ -599,6 +616,9 @@ async def random_walk_songs(
         steps_returned=max(0, len(path) - 1),
         k=k,
         effective_k=effective_k,
+        exploration_pool_k=exploration_pool_k,
+        exploration_rate=exploration_rate,
+        exploratory_steps=exploratory_steps,
         temperature=temperature,
         restart_prob=restart_prob,
         no_repeat_window=no_repeat_window,

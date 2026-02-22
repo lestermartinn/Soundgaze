@@ -8,7 +8,7 @@ import PointCloudViewer from "../components/PointCloudViewer";
 import ControlsOverlay, { ExploreMode } from "../components/ControlsOverlay";
 import DensitySlider, { Topology } from "../components/DensitySlider";
 import SongSidebar, { SongData } from "../components/SongSidebar";
-import { fetchPoints, fetchSimilar, fetchWalk, type SongPoint, type WalkStep, type PointsResponse } from "../lib/api";
+import { fetchPoints, fetchSimilar, fetchDescription, fetchWalk, type SongPoint, type WalkStep, type PointsResponse } from "../lib/api";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -27,8 +27,6 @@ export default function ExplorePage() {
   // Sidebar
   const [selectedSong, setSelectedSong] = useState<SongData | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
 
   // Walk
   const [walkPoints, setWalkPoints] = useState<SongPoint[]>([]);
@@ -39,6 +37,7 @@ export default function ExplorePage() {
 
   // Controls
   const [exploreMode, setExploreMode] = useState<ExploreMode>("manual");
+  const [revealed, setRevealed] = useState(false);
   const [pointDensity, setPointDensity] = useState(50);
   const [topology, setTopology] = useState<Topology>("uniform");
   const coordMode = topology === "uniform" ? "uniform" : "raw";
@@ -54,6 +53,11 @@ export default function ExplorePage() {
   useEffect(() => {
     if (status === "unauthenticated") router.replace("/");
   }, [status, router]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setRevealed(true), 50);
+    return () => clearTimeout(t);
+  }, []);
 
   // Fetch points — debounced on pointDensity / session
   // Quadratic scale: slider 1–100 → ~10–5000 points for better high-density reach
@@ -117,42 +121,47 @@ export default function ExplorePage() {
 
   async function onSongSelect(point: SongPoint) {
     setSidebarOpen(true);
-    setSaveStatus("idle");
     setSelectedSong({ id: point.track_id, isLoading: true });
 
-    // Fetch neighbor highlights — add any not already in the cloud as extra points
-    try {
-      const { songs } = await fetchSimilar(point.track_id);
-      const existingIds = new Set(globalPoints.map((p) => p.track_id));
-      setNeighborIds(new Set(songs.map((s) => s.track_id)));
-      setNeighborPoints(songs.filter((s) => !existingIds.has(s.track_id)));
-    } catch (err) {
-      console.error("fetchSimilar failed", err);
+    // Kick off neighbors + Gemini in parallel — don't block album art on either
+    const geminiPromise = fetchDescription(point.name, point.artist, point.genre);
+
+    fetchSimilar(point.track_id)
+      .then(({ songs }) => {
+        const existingIds = new Set(globalPoints.map((p) => p.track_id));
+        setNeighborIds(new Set(songs.map((s) => s.track_id)));
+        setNeighborPoints(songs.filter((s) => !existingIds.has(s.track_id)));
+      })
+      .catch((err) => console.error("fetchSimilar failed", err));
+
+    // Await Spotify first — it's fast (~200ms) and unblocks album art + preview
+    let spotifyData = null;
+    if (session?.accessToken) {
+      try {
+        const r = await fetch(`https://api.spotify.com/v1/tracks/${point.track_id}`, {
+          headers: { Authorization: `Bearer ${session.accessToken}` },
+        });
+        if (r.ok) spotifyData = await r.json();
+      } catch { /* fall through to point data */ }
     }
 
-    // Fetch rich Spotify metadata
-    if (!session?.accessToken) return;
+    // Show album art, title, artist, preview immediately — description still loading
+    setSelectedSong({
+      id: point.track_id,
+      title: spotifyData?.name ?? point.name,
+      artist: spotifyData?.artists?.map((a: { name: string }) => a.name).join(", ") ?? point.artist,
+      album: spotifyData?.album?.name,
+      albumArt: spotifyData?.album?.images?.[0]?.url ?? undefined,
+      previewUrl: spotifyData?.preview_url ?? null,
+      isDescriptionLoading: true,
+    });
+
+    // Await Gemini and fill in description when ready
     try {
-      const res = await fetch(`https://api.spotify.com/v1/tracks/${point.track_id}`, {
-        headers: { Authorization: `Bearer ${session.accessToken}` },
-      });
-      if (!res.ok) {
-        setSelectedSong({ id: point.track_id });
-        return;
-      }
-      const data = await res.json();
-      setSelectedSong({
-        id: point.track_id,
-        title: data.name,
-        artist: data.artists.map((a: { name: string }) => a.name).join(", "),
-        album: data.album?.name,
-        albumArt: data.album?.images?.[0]?.url ?? undefined,
-        previewUrl: data.preview_url ?? null,
-        culturalDescription:
-          "Cultural and genre context will appear here once the backend is connected.",
-      });
+      const { description } = await geminiPromise;
+      setSelectedSong((prev) => prev ? { ...prev, culturalDescription: description, isDescriptionLoading: false } : prev);
     } catch {
-      setSelectedSong({ id: point.track_id });
+      setSelectedSong((prev) => prev ? { ...prev, isDescriptionLoading: false } : prev);
     }
   }
 
@@ -161,7 +170,6 @@ export default function ExplorePage() {
     setSelectedSong(null);
     setNeighborIds(new Set());
     setNeighborPoints([]);
-    setSaveStatus("idle");
     setWalkIds(new Set());
     setWalkPoints([]);
     setWalkSteps([]);
@@ -175,7 +183,7 @@ export default function ExplorePage() {
     setWalkStepIndex(0);
     try {
       const result = await fetchWalk(selectedSong.id, { steps: 10, temperature: 0.5 });
-      const steps = result.path.slice(1); // skip step 0 (seed song)
+      const steps = result.path.slice(1);
 
       const existingIds = new Set([...globalPoints, ...neighborPoints].map((p) => p.track_id));
       const newWalkPoints: SongPoint[] = [];
@@ -215,30 +223,15 @@ export default function ExplorePage() {
       await onSongSelect(point);
     } else {
       setSidebarOpen(true);
-      setSaveStatus("idle");
       setSelectedSong({ id: step.track_id, title: step.name, artist: step.artist });
     }
   }
 
-  async function saveToLikedSongs() {
-    if (!selectedSong || !session?.accessToken) return;
-    setIsSaving(true);
-    setSaveStatus("idle");
-    try {
-      const res = await fetch("https://api.spotify.com/v1/me/tracks", {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${session.accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ ids: [selectedSong.id] }),
-      });
-      setSaveStatus(res.ok ? "saved" : "error");
-    } catch {
-      setSaveStatus("error");
-    } finally {
-      setIsSaving(false);
-    }
+  function skipToNext() {
+    if (!selectedSong) return;
+    const currentIndex = globalPoints.findIndex((p) => p.track_id === selectedSong.id);
+    const nextPoint = globalPoints[currentIndex + 1] ?? globalPoints[0];
+    if (nextPoint) onSongSelect(nextPoint);
   }
 
   // ---------------------------------------------------------------------------
@@ -247,6 +240,16 @@ export default function ExplorePage() {
 
   return (
     <main className="relative w-screen h-screen bg-near-black overflow-hidden flex flex-col">
+
+      {/* ── Black entrance overlay — fades away on mount ── */}
+      <div
+        className="fixed inset-0 z-50 pointer-events-none"
+        style={{
+          backgroundColor: "#080808",
+          opacity: revealed ? 0 : 1,
+          transition: revealed ? "opacity 400ms cubic-bezier(0.4, 0, 0.2, 1)" : "none",
+        }}
+      />
 
       {/* ── Navbar ── */}
       <Navbar />
@@ -311,13 +314,7 @@ export default function ExplorePage() {
             song={selectedSong}
             isOpen={sidebarOpen}
             onClose={closeSidebar}
-            onSave={saveToLikedSongs}
-            isSaving={isSaving}
-            saveStatus={saveStatus}
-            onWalk={startWalk}
-            isWalking={isWalking}
-            onNextStep={nextStep}
-            walkProgress={isWalking ? { current: walkStepIndex, total: walkSteps.length } : undefined}
+            onSkip={skipToNext}
           />
         </div>
 

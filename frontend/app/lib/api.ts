@@ -20,6 +20,12 @@ export interface SimilarResponse {
   songs: SongPoint[];
 }
 
+export interface DescribeResponse {
+  name: string;
+  artist: string;
+  description: string;
+}
+
 export interface WalkStep {
   step: number;
   track_id: string;
@@ -110,7 +116,7 @@ export async function fetchPoints(n: number, userId?: string): Promise<PointsRes
   const data = await res.json();
   return {
     global_sample: data.global_songs as SongPoint[],
-    user_songs:    data.user_songs   as SongPoint[],
+    user_songs: data.user_songs as SongPoint[],
   };
 }
 
@@ -123,7 +129,7 @@ export async function fetchWalk(
   opts: { steps?: number; temperature?: number } = {},
 ): Promise<WalkResponse> {
   const params = new URLSearchParams({
-    steps:       String(opts.steps       ?? 10),
+    steps: String(opts.steps ?? 10),
     temperature: String(opts.temperature ?? 0.8),
   });
   const res = await fetch(`${API_BASE}/songs/${encodeURIComponent(trackId)}/walk?${params}`);
@@ -140,5 +146,24 @@ export async function fetchSimilar(trackId: string, n = 10): Promise<SimilarResp
 
   const res = await fetch(`${API_BASE}/songs/${encodeURIComponent(trackId)}/similar?n=${n}`);
   if (!res.ok) throw new Error(`fetchSimilar failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Fetch a Gemini-generated cultural description for a song.
+ * Backend: GET /songs/describe?name=...&artist=...&genre=...
+ */
+export async function fetchDescription(
+  name: string,
+  artist: string,
+  genre?: string,
+): Promise<DescribeResponse> {
+  if (USE_PLACEHOLDERS) {
+    return { name, artist, description: "" };
+  }
+  const params = new URLSearchParams({ name, artist });
+  if (genre) params.set("genre", genre);
+  const res = await fetch(`${API_BASE}/songs/describe?${params}`);
+  if (!res.ok) throw new Error(`fetchDescription failed: ${res.status}`);
   return res.json();
 }
