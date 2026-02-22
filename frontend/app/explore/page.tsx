@@ -8,7 +8,7 @@ import PointCloudViewer from "../components/PointCloudViewer";
 import ControlsOverlay, { ExploreMode } from "../components/ControlsOverlay";
 import DensitySlider, { Topology } from "../components/DensitySlider";
 import SongSidebar, { SongData } from "../components/SongSidebar";
-import { fetchPoints, fetchSimilar, type SongPoint } from "../lib/api";
+import { fetchPoints, fetchSimilar, fetchDescription, type SongPoint } from "../lib/api";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -32,6 +32,7 @@ export default function ExplorePage() {
 
   // Controls
   const [exploreMode, setExploreMode]   = useState<ExploreMode>("manual");
+  const [revealed, setRevealed]         = useState(false);
   const [pointDensity, setPointDensity] = useState(50);
   const [topology, setTopology]         = useState<Topology>("uniform");
   void exploreMode;
@@ -40,6 +41,11 @@ export default function ExplorePage() {
   useEffect(() => {
     if (status === "unauthenticated") router.replace("/");
   }, [status, router]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setRevealed(true), 50);
+    return () => clearTimeout(t);
+  }, []);
 
   // Fetch points — debounced on pointDensity / session
   useEffect(() => {
@@ -69,37 +75,41 @@ export default function ExplorePage() {
     setSaveStatus("idle");
     setSelectedSong({ id: point.track_id, isLoading: true });
 
-    // Fetch neighbor highlights
-    try {
-      const { songs } = await fetchSimilar(point.track_id);
-      setNeighborIds(new Set(songs.map((s) => s.track_id)));
-    } catch (err) {
-      console.error("fetchSimilar failed", err);
+    // Kick off neighbors + Gemini in the background (don't await yet)
+    fetchSimilar(point.track_id)
+      .then(({ songs }) => setNeighborIds(new Set(songs.map((s) => s.track_id))))
+      .catch((err) => console.error("fetchSimilar failed", err));
+
+    const geminiPromise = fetchDescription(point.name, point.artist, point.genre);
+
+    // Await Spotify first — it's fast (~200ms) and unblocks album art + preview
+    let spotifyData = null;
+    if (session?.accessToken) {
+      try {
+        const r = await fetch(`https://api.spotify.com/v1/tracks/${point.track_id}`, {
+          headers: { Authorization: `Bearer ${session.accessToken}` },
+        });
+        if (r.ok) spotifyData = await r.json();
+      } catch { /* fall through to point data */ }
     }
 
-    // Fetch rich Spotify metadata
-    if (!session?.accessToken) return;
+    // Show album art, title, artist, preview immediately — description still loading
+    setSelectedSong({
+      id: point.track_id,
+      title:    spotifyData?.name ?? point.name,
+      artist:   spotifyData?.artists?.map((a: { name: string }) => a.name).join(", ") ?? point.artist,
+      album:    spotifyData?.album?.name,
+      albumArt: spotifyData?.album?.images?.[0]?.url ?? undefined,
+      previewUrl: spotifyData?.preview_url ?? null,
+      isDescriptionLoading: true,
+    });
+
+    // Await Gemini and fill in description when ready
     try {
-      const res = await fetch(`https://api.spotify.com/v1/tracks/${point.track_id}`, {
-        headers: { Authorization: `Bearer ${session.accessToken}` },
-      });
-      if (!res.ok) {
-        setSelectedSong({ id: point.track_id });
-        return;
-      }
-      const data = await res.json();
-      setSelectedSong({
-        id: point.track_id,
-        title: data.name,
-        artist: data.artists.map((a: { name: string }) => a.name).join(", "),
-        album: data.album?.name,
-        albumArt: data.album?.images?.[0]?.url ?? undefined,
-        previewUrl: data.preview_url ?? null,
-        culturalDescription:
-          "Cultural and genre context will appear here once the backend is connected.",
-      });
+      const { description } = await geminiPromise;
+      setSelectedSong((prev) => prev ? { ...prev, culturalDescription: description, isDescriptionLoading: false } : prev);
     } catch {
-      setSelectedSong({ id: point.track_id });
+      setSelectedSong((prev) => prev ? { ...prev, isDescriptionLoading: false } : prev);
     }
   }
 
@@ -108,6 +118,13 @@ export default function ExplorePage() {
     setSelectedSong(null);
     setNeighborIds(new Set());
     setSaveStatus("idle");
+  }
+
+  function skipToNext() {
+    if (!selectedSong) return;
+    const currentIndex = globalPoints.findIndex((p) => p.track_id === selectedSong.id);
+    const nextPoint = globalPoints[currentIndex + 1] ?? globalPoints[0];
+    if (nextPoint) onSongSelect(nextPoint);
   }
 
   async function saveToLikedSongs() {
@@ -137,6 +154,16 @@ export default function ExplorePage() {
 
   return (
     <main className="relative w-screen h-screen bg-near-black overflow-hidden flex flex-col">
+
+      {/* ── Black entrance overlay — fades away on mount ── */}
+      <div
+        className="fixed inset-0 z-50 pointer-events-none"
+        style={{
+          backgroundColor: "#080808",
+          opacity: revealed ? 0 : 1,
+          transition: revealed ? "opacity 400ms cubic-bezier(0.4, 0, 0.2, 1)" : "none",
+        }}
+      />
 
       {/* ── Navbar ── */}
       <Navbar />
@@ -198,6 +225,7 @@ export default function ExplorePage() {
             isOpen={sidebarOpen}
             onClose={closeSidebar}
             onSave={saveToLikedSongs}
+            onSkip={skipToNext}
             isSaving={isSaving}
             saveStatus={saveStatus}
           />

@@ -20,6 +20,12 @@ export interface SimilarResponse {
   songs: SongPoint[];
 }
 
+export interface DescribeResponse {
+  name: string;
+  artist: string;
+  description: string;
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // Set to true to use mock data
@@ -94,5 +100,24 @@ export async function fetchSimilar(trackId: string, n = 10): Promise<SimilarResp
 
   const res = await fetch(`${API_BASE}/songs/${encodeURIComponent(trackId)}/similar?n=${n}`);
   if (!res.ok) throw new Error(`fetchSimilar failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Fetch a Gemini-generated cultural description for a song.
+ * Backend: GET /songs/describe?name=...&artist=...&genre=...
+ */
+export async function fetchDescription(
+  name: string,
+  artist: string,
+  genre?: string,
+): Promise<DescribeResponse> {
+  if (USE_PLACEHOLDERS) {
+    return { name, artist, description: "" };
+  }
+  const params = new URLSearchParams({ name, artist });
+  if (genre) params.set("genre", genre);
+  const res = await fetch(`${API_BASE}/songs/describe?${params}`);
+  if (!res.ok) throw new Error(`fetchDescription failed: ${res.status}`);
   return res.json();
 }
