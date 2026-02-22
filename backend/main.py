@@ -15,6 +15,8 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
+logger = logging.getLogger(__name__)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -359,7 +361,7 @@ async def sync_spotify_library(body: SpotifyImportRequest):
             status_code=400,
             detail=f"Failed to sync Spotify library: {str(e)}"
         )
-
+'''
 @app.post("/songs/similar", response_model=SimilarResponse)
 async def similar(body: SimilarRequest):
     """Return the k most similar songs to a given 12D feature vector via Actian VectorAI cosine search."""
@@ -371,3 +373,44 @@ async def similar(body: SimilarRequest):
             for r in results
         ]
     ) # do not use SimilarResponse(results = result) for validation using SimilarSong model
+'''
+from typing import Any
+
+@app.get("/songs/{song_id}/similar")
+async def get_similar_songs(song_id: str, n: int = 10) -> Any:
+    song = await get_song(song_id)
+    if not song:
+        raise HTTPException(status_code=404, detail=f"Song '{song_id}' not found.")
+    
+    vector_8d = song.get("vector")
+    if not vector_8d:
+        raise HTTPException(status_code=404, detail=f"No vector found for song '{song_id}'.")
+
+    similar = await search_similar(query_vector=vector_8d, top_k=n * 3)  # fetch extra to account for deduplication
+
+    client = get_db()
+    results = []
+    seen_ids = {song_id}  # pre-seed with the query song so it's never included
+
+    for s in similar:
+        track_id = s.get("track_id")
+        if not track_id or track_id in seen_ids:
+            continue
+
+        seen_ids.add(track_id)
+        result = {**s}
+
+        try:
+            vector_3d, payload_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
+            if vector_3d:
+                result["vector_3d"] = list(vector_3d)
+                result["xyz_raw"] = (payload_3d or {}).get("xyz_raw")
+                result["xyz_uniform"] = (payload_3d or {}).get("xyz_uniform")
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"No 3D record for '{track_id}': {e}")
+
+        results.append(result)
+        if len(results) >= n:
+            break
+
+    return {"songs": results}
