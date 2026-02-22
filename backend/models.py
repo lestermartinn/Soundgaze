@@ -161,6 +161,9 @@ class RandomWalkResponse(BaseModel):
     steps_returned: int
     k: int
     effective_k: int
+    exploration_pool_k: int
+    exploration_rate: float
+    exploratory_steps: int
     temperature: float
     restart_prob: float
     no_repeat_window: int
