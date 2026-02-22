@@ -5,7 +5,7 @@ Follow these steps to get the full stack running locally. You will need three te
 ---
 
 ## Prerequisites
-
+.
 | Tool | Min Version | Install |
 |---|---|---|
 | Node.js | 18+ | https://nodejs.org |
