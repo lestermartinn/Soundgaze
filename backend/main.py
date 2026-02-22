@@ -8,7 +8,13 @@ Add your routes below. Use /songs/recommend as a reference for the full pattern:
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+load_dotenv()
+
+import google.genai as genai
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,6 +33,7 @@ from models import (
     SongPoolResponse,
     SongUpsertRequest,
     SongGetResponse,
+    SongDescribeResponse,
 )
 
 
@@ -142,6 +149,37 @@ async def put_song(body: SongUpsertRequest):
         raise HTTPException(status_code=500, detail="Song upsert completed but read-back failed.")
     return SongGetResponse(**stored)
 
+# ---------------------------------------------------------------------------
+# Gemini
+# ---------------------------------------------------------------------------
+
+_gemini_client = None
+
+def _get_gemini() -> genai.Client:
+    global _gemini_client
+    if _gemini_client is None:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=503, detail="GEMINI_API_KEY not set.")
+        _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client
+
+@app.get("/songs/describe", response_model=SongDescribeResponse)
+async def describe_song(name: str, artist: str, genre: str | None = None):
+    """Return a short Gemini-generated cultural description for a song."""
+    client = _get_gemini()
+    genre_hint = f" ({genre})" if genre else ""
+    prompt = (
+        f'Write a TWO (2) sentence cultural and musical description of "{name}" by {artist}{genre_hint}. '
+        f"Cover the genre, era, cultural significance, and what makes it distinctive. "
+        f"Be concise and engaging — no headers or bullet points."
+    )
+    response = await client.aio.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
+    return SongDescribeResponse(name=name, artist=artist, description=response.text.strip())
+
 
 @app.get("/songs/{song_id}", response_model=SongGetResponse)
 async def fetch_song(song_id: str):
@@ -211,8 +249,3 @@ async def get_all_songs_3d():
         }
         for r in results
     ]
-
-
-# ---------------------------------------------------------------------------
-# Add your routes here
-# ---------------------------------------------------------------------------

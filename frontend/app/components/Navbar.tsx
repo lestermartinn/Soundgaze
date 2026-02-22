@@ -34,7 +34,7 @@ export default function Navbar() {
 
       {/* ── Left: Wordmark ── */}
       <div className="flex items-center gap-3">
-        <span className="w-3 h-8 bg-spotify-green border-2 border-black" />
+        <span className="w-3 h-8 bg-spotify-green" />
         <span className="font-black text-xl uppercase tracking-widest text-white">
           Soundgaze
         </span>

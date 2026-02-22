@@ -115,17 +115,6 @@ async def close_db() -> None:
         _client = None
         logger.info("Vector DB connection closed.")
 
-
-# ---------------------------------------------------------------------------
-# SAMPLE helper -- use this as a reference when adding new DB helpers
-#
-# Pattern:
-#   1. Call get_db() to get the live AsyncCortexClient
-#   2. Use client methods: search(), upsert(), batch_upsert(), get(), count(), etc.
-#   3. Map integer IDs back to string track_ids via result.payload["track_id"]
-#   4. Return plain dicts or dataclasses (not raw cortex objects) to keep routes clean
-# ---------------------------------------------------------------------------
-
 async def search_similar(query_vector: list[float], top_k: int = 5) -> list[dict]:
     """Return top_k songs closest to query_vector by COSINE similarity."""
     client = get_db()

@@ -1,99 +1,129 @@
 "use client";
 
-import { useRef, useMemo, useCallback } from "react";
+import { useRef, useMemo, useCallback, useState } from "react";
 import { Canvas, ThreeEvent } from "@react-three/fiber";
-import { OrbitControls, Points, PointMaterial } from "@react-three/drei";
+import { CameraControls } from "@react-three/drei";
 import * as THREE from "three";
+import type { SongPoint } from "../lib/api";
 
 // ---------------------------------------------------------------------------
-// Types
+// Colors
 // ---------------------------------------------------------------------------
 
-interface SongPoint {
-  id: string;
-  position: [number, number, number]; // UMAP-reduced (x, y, z)
-}
-
-interface PointCloudProps {
-  onPointClick: (songId: string) => void;
-}
+const COLOR_GLOBAL   = new THREE.Color("#4a4a5a");
+const COLOR_USER     = new THREE.Color("#1DB954");
+const COLOR_NEIGHBOR = new THREE.Color("#FF6B35");
 
 // ---------------------------------------------------------------------------
-// Placeholder dataset — 1,000 random points in a sphere.
-// Replace with real UMAP coordinates fetched from FastAPI.
+// Props
 // ---------------------------------------------------------------------------
 
-function generatePlaceholderPoints(count = 1000): SongPoint[] {
-  return Array.from({ length: count }, (_, i) => {
-    // Uniform distribution inside a unit sphere
-    const u = Math.random();
-    const v = Math.random();
-    const theta = 2 * Math.PI * u;
-    const phi = Math.acos(2 * v - 1);
-    const r = Math.cbrt(Math.random()) * 50; // radius up to 50 units
-    return {
-      id: `song_${i}`,
-      position: [
-        r * Math.sin(phi) * Math.cos(theta),
-        r * Math.sin(phi) * Math.sin(theta),
-        r * Math.cos(phi),
-      ],
-    };
-  });
+export interface PointCloudViewerProps {
+  globalPoints: SongPoint[];
+  userSongIds: Set<string>;
+  neighborIds: Set<string>;
+  coordMode: "raw" | "uniform";
+  onPointClick: (point: SongPoint) => void;
 }
 
 // ---------------------------------------------------------------------------
-// Inner scene — separated so it runs inside <Canvas>
+// Circle texture — renders points as filled circles via alphaTest
+// ---------------------------------------------------------------------------
+
+function makeCircleTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d")!;
+  ctx.beginPath();
+  ctx.arc(32, 32, 30, 0, Math.PI * 2);
+  ctx.fillStyle = "white";
+  ctx.fill();
+  return new THREE.CanvasTexture(canvas);
+}
+
+// ---------------------------------------------------------------------------
+// Inner scene — must live inside <Canvas>
 // ---------------------------------------------------------------------------
 
 function PointCloud({
-  points,
+  globalPoints,
+  userSongIds,
+  neighborIds,
+  coordMode,
   onPointClick,
-}: {
-  points: SongPoint[];
-  onPointClick: (songId: string) => void;
-}) {
+  onHover,
+}: PointCloudViewerProps & { onHover: (point: SongPoint | null) => void }) {
   const meshRef = useRef<THREE.Points>(null);
 
-  // Flatten positions into a Float32Array for BufferGeometry
-  const positions = useMemo(() => {
-    const arr = new Float32Array(points.length * 3);
-    points.forEach(({ position }, i) => {
-      arr[i * 3] = position[0];
-      arr[i * 3 + 1] = position[1];
-      arr[i * 3 + 2] = position[2];
-    });
-    return arr;
-  }, [points]);
+  const circleTexture = useMemo(() => makeCircleTexture(), []);
 
-  // Raycaster-based click: find the nearest point and fire the callback
+  const { positions, colors } = useMemo(() => {
+    const pos = new Float32Array(globalPoints.length * 3);
+    const col = new Float32Array(globalPoints.length * 3);
+
+    globalPoints.forEach((p, i) => {
+      const xyz = coordMode === "raw" ? p.xyz_raw : p.xyz_uniform;
+      pos[i * 3]     = xyz[0];
+      pos[i * 3 + 1] = xyz[1];
+      pos[i * 3 + 2] = xyz[2];
+
+      const c = neighborIds.has(p.track_id)
+        ? COLOR_NEIGHBOR
+        : userSongIds.has(p.track_id)
+        ? COLOR_USER
+        : COLOR_GLOBAL;
+
+      col[i * 3]     = c.r;
+      col[i * 3 + 1] = c.g;
+      col[i * 3 + 2] = c.b;
+    });
+
+    return { positions: pos, colors: col };
+  }, [globalPoints, userSongIds, neighborIds, coordMode]);
+
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
       if (e.index === undefined) return;
-      const song = points[e.index];
-      if (song) onPointClick(song.id);
+      const point = globalPoints[e.index];
+      if (point) onPointClick(point);
     },
-    [points, onPointClick]
+    [globalPoints, onPointClick]
+  );
+
+  const handlePointerMove = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      e.stopPropagation();
+      if (e.index === undefined) { onHover(null); return; }
+      onHover(globalPoints[e.index] ?? null);
+    },
+    [globalPoints, onHover]
   );
 
   return (
-    <Points
+    <points
       ref={meshRef}
-      positions={positions}
-      stride={3}
-      frustumCulled={false}
       onClick={handleClick}
+      onPointerMove={handlePointerMove}
+      onPointerOut={() => onHover(null)}
+      frustumCulled={false}
     >
-      <PointMaterial
-        transparent
-        color="#7c6af7"
-        size={0.6}
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-color"    args={[colors, 3]}    />
+      </bufferGeometry>
+      <pointsMaterial
+        vertexColors
+        map={circleTexture}
+        alphaTest={0.5}
+        size={0.04}
         sizeAttenuation
         depthWrite={false}
-        opacity={0.85}
+        transparent
+        opacity={0.9}
       />
-    </Points>
+    </points>
   );
 }
 
@@ -101,28 +131,38 @@ function PointCloud({
 // Public component
 // ---------------------------------------------------------------------------
 
-export default function PointCloudViewer({ onPointClick }: PointCloudProps) {
-  // Memoize so the dataset is stable across re-renders
-  const points = useMemo(() => generatePlaceholderPoints(1000), []);
+export default function PointCloudViewer(props: PointCloudViewerProps) {
+  const [hoveredPoint, setHoveredPoint] = useState<SongPoint | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    setMousePos({ x: e.clientX, y: e.clientY });
+  }, []);
 
   return (
-    <Canvas
-      camera={{ position: [0, 0, 120], fov: 60, near: 0.1, far: 2000 }}
-      style={{ background: "#08090c", width: "100%", height: "100%" }}
-    >
-      {/* Ambient + point light for future mesh objects */}
-      <ambientLight intensity={0.4} />
-      <pointLight position={[100, 100, 100]} intensity={1.2} />
+    <div className="relative w-full h-full" onMouseMove={handleMouseMove}>
+      <Canvas
+        camera={{ position: [0, 0, 3], fov: 60, near: 0.01, far: 100 }}
+        style={{ background: "#08090c", width: "100%", height: "100%" }}
+      >
+        <PointCloud {...props} onHover={setHoveredPoint} />
+        <CameraControls
+          dampingFactor={0.06}
+          azimuthRotateSpeed={0.5}
+          polarRotateSpeed={0.5}
+          dollySpeed={0.8}
+        />
+      </Canvas>
 
-      <PointCloud points={points} onPointClick={onPointClick} />
-
-      {/* Orbit controls: rotate, zoom, pan */}
-      <OrbitControls
-        enableDamping
-        dampingFactor={0.06}
-        rotateSpeed={0.5}
-        zoomSpeed={0.8}
-      />
-    </Canvas>
+      {hoveredPoint && (
+        <div
+          className="pointer-events-none fixed z-50 px-2 py-1 bg-black border border-white/20 font-mono text-xs text-white whitespace-nowrap"
+          style={{ left: mousePos.x + 14, top: mousePos.y - 32 }}
+        >
+          <span className="font-black">{hoveredPoint.name}</span>
+          <span className="text-white/50 ml-1">— {hoveredPoint.artist}</span>
+        </div>
+      )}
+    </div>
   );
 }

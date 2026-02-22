@@ -7,19 +7,7 @@ import Navbar from "../components/Navbar";
 import PointCloudViewer from "../components/PointCloudViewer";
 import ControlsOverlay, { ExploreMode } from "../components/ControlsOverlay";
 import DensitySlider from "../components/DensitySlider";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface SelectedSong {
-  id: string;
-  title?: string;
-  artist?: string;
-  albumArt?: string;
-  culturalDescription?: string;
-  previewUrl?: string;
-}
+import { fetchPoints, fetchSimilar, type SongPoint } from "../lib/api";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -29,36 +17,67 @@ export default function ExplorePage() {
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  const [selectedSong, setSelectedSong] = useState<SelectedSong | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
+  // Point cloud
+  const [globalPoints, setGlobalPoints]   = useState<SongPoint[]>([]);
+  const [userSongIds, setUserSongIds]     = useState<Set<string>>(new Set());
+  const [neighborIds, setNeighborIds]     = useState<Set<string>>(new Set());
+  const [coordMode]                        = useState<"raw" | "uniform">("uniform");
 
-  const [exploreMode, setExploreMode] = useState<ExploreMode>("manual");
-  const [pointDensity, setPointDensity] = useState(50);
+  // Sidebar
+  const [selectedSong, setSelectedSong]   = useState<SongPoint | null>(null);
+  const [sidebarOpen, setSidebarOpen]     = useState(false);
+  const [isSaving, setIsSaving]           = useState(false);
+  const [saveStatus, setSaveStatus]       = useState<"idle" | "saved" | "error">("idle");
+
+  // Controls
+  const [exploreMode, setExploreMode]     = useState<ExploreMode>("manual");
+  const [pointDensity, setPointDensity]   = useState(50);
   void exploreMode;
-  void pointDensity;
 
+  // Auth guard
   useEffect(() => {
     if (status === "unauthenticated") router.replace("/");
   }, [status, router]);
 
+  // Fetch points — debounced on pointDensity / session
+  useEffect(() => {
+    const userId = (session as { spotifyId?: string } | null)?.spotifyId ?? undefined;
+    const n = Math.max(10, pointDensity * 10); // 10–1000 points
+    const timer = setTimeout(async () => {
+      try {
+        const data = await fetchPoints(n, userId);
+        setGlobalPoints(data.global_sample);
+        setUserSongIds(new Set(data.user_songs.map((p) => p.track_id)));
+      } catch (err) {
+        console.error("fetchPoints failed", err);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [pointDensity, session]);
+
   if (status === "loading") return null;
   if (status === "unauthenticated") return null;
 
-  function onSongSelect(songId: string) {
+  // ---------------------------------------------------------------------------
+  // Handlers
+  // ---------------------------------------------------------------------------
+
+  async function onSongSelect(point: SongPoint) {
     setSidebarOpen(true);
-    setSelectedSong({
-      id: songId,
-      title: "Song Title",
-      artist: "Artist Name",
-      culturalDescription: "Cultural and genre context will appear here once the backend is connected.",
-    });
+    setSelectedSong(point);
+    setSaveStatus("idle");
+    try {
+      const { songs } = await fetchSimilar(point.track_id);
+      setNeighborIds(new Set(songs.map((s) => s.track_id)));
+    } catch (err) {
+      console.error("fetchSimilar failed", err);
+    }
   }
 
   function closeSidebar() {
     setSidebarOpen(false);
     setSelectedSong(null);
+    setNeighborIds(new Set());
     setSaveStatus("idle");
   }
 
@@ -67,13 +86,13 @@ export default function ExplorePage() {
     setIsSaving(true);
     setSaveStatus("idle");
     try {
-      const res = await fetch(`https://api.spotify.com/v1/me/tracks`, {
+      const res = await fetch("https://api.spotify.com/v1/me/tracks", {
         method: "PUT",
         headers: {
           Authorization: `Bearer ${session.accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ids: [selectedSong.id] }),
+        body: JSON.stringify({ ids: [selectedSong.track_id] }),
       });
       setSaveStatus(res.ok ? "saved" : "error");
     } catch {
@@ -83,18 +102,28 @@ export default function ExplorePage() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
   return (
     <main className="relative w-screen h-screen bg-near-black overflow-hidden flex flex-col">
 
       {/* ── Navbar ── */}
       <Navbar />
 
-      {/* ── Canvas + overlays layer ── */}
+      {/* ── Canvas + overlays ── */}
       <div className="relative flex-1 overflow-hidden">
 
-        {/* Three.js canvas — Parker mounts into this div */}
-        <div id="canvas-container" className="absolute inset-0 z-0">
-          <PointCloudViewer onPointClick={onSongSelect} />
+        {/* Three.js canvas */}
+        <div className="absolute inset-0 z-0">
+          <PointCloudViewer
+            globalPoints={globalPoints}
+            userSongIds={userSongIds}
+            neighborIds={neighborIds}
+            coordMode={coordMode}
+            onPointClick={onSongSelect}
+          />
         </div>
 
         {/* ── Corner green vignettes ── */}
@@ -147,38 +176,24 @@ export default function ExplorePage() {
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
             {selectedSong ? (
               <>
-                {/* Album art placeholder */}
-                <div className="w-full aspect-square bg-black border-4 border-black flex items-center justify-center">
-                  {selectedSong.albumArt ? (
-                    <img
-                      src={selectedSong.albumArt}
-                      alt={selectedSong.title}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-white/20 font-black text-sm uppercase tracking-widest">
-                      No Art
-                    </span>
-                  )}
-                </div>
-
                 {/* Song info */}
                 <div className="border-b-4 border-black pb-3">
                   <h2 className="font-black text-2xl uppercase leading-tight">
-                    {selectedSong.title ?? selectedSong.id}
+                    {selectedSong.name}
                   </h2>
-                  {selectedSong.artist && (
-                    <p className="font-mono font-bold text-sm text-black/60 mt-1">
-                      {selectedSong.artist}
-                    </p>
-                  )}
+                  <p className="font-mono font-bold text-sm text-black/60 mt-1">
+                    {selectedSong.artist}
+                  </p>
+                  <p className="font-mono text-xs text-black/40 mt-1 uppercase tracking-widest">
+                    {selectedSong.genre}
+                  </p>
                 </div>
 
-                {/* Cultural / genre description (Gemini) */}
-                {selectedSong.culturalDescription && (
+                {/* Similar songs count */}
+                {neighborIds.size > 0 && (
                   <div className="bg-black text-white p-3 border-4 border-black">
                     <p className="font-mono text-xs leading-relaxed">
-                      {selectedSong.culturalDescription}
+                      <span className="text-[#FF6B35] font-black">{neighborIds.size}</span> similar songs highlighted in the cloud.
                     </p>
                   </div>
                 )}
