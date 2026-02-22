@@ -27,7 +27,13 @@ from models import (
     SongPoolResponse,
     SongUpsertRequest,
     SongGetResponse,
+    SpotifyImportRequest,
+    SpotifySyncResponse,
+    SimilarResponse,
+    SimilarSong,
+    SimilarRequest
 )
+from spotify import SpotifyImporter
 
 
 @asynccontextmanager
@@ -214,5 +220,154 @@ async def get_all_songs_3d():
 
 
 # ---------------------------------------------------------------------------
-# Add your routes here
+# Debug
 # ---------------------------------------------------------------------------
+
+@app.get("/debug/songs_3d")
+async def debug_songs_3d(n: int = 5):
+    """Return n sample points from songs_3d (searches with a zero vector)."""
+    client = get_db()
+    results = await client.search(COLLECTION_3D, query=[0.0, 0.0, 0.0], top_k=n, with_payload=True, with_vectors=True)
+    return [
+        {
+            "track_id": r.payload.get("track_id"),
+            "name":     r.payload.get("name"),
+            "artist":   r.payload.get("artist"),
+            "genre":    r.payload.get("genre"),
+            "user_ids": r.payload.get("user_ids"),
+            "xyz":      list(r.vector) if r.vector else None,
+            "score":    round(r.score, 4),
+        }
+        for r in results
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Point cloud
+# ---------------------------------------------------------------------------
+
+@app.get("/songs/3d/all")
+async def get_all_songs_3d():
+    """
+    Return every point in the songs_3d collection with both coordinate sets.
+
+    Each item includes:
+      xyz_raw     -- raw UMAP coords (accurate topology)
+      xyz_uniform -- quantile-normalized coords (uniform distribution)
+      track_id, name, artist, genre
+    """
+    client = get_db()
+    total = await client.count(COLLECTION_3D)
+    if total == 0:
+        return []
+
+    results = await client.search(
+        COLLECTION_3D,
+        query=[0.0, 0.0, 0.0],
+        top_k=total,
+        with_payload=True,
+    )
+    return [
+        {
+            "track_id":   r.payload.get("track_id"),
+            "name":       r.payload.get("name"),
+            "artist":     r.payload.get("artist"),
+            "genre":      r.payload.get("genre"),
+            "xyz_raw":     r.payload.get("xyz_raw"),
+            "xyz_uniform": r.payload.get("xyz_uniform"),
+        }
+        for r in results
+    ]
+
+
+@app.post("/songs/spotify/sync", response_model=SpotifySyncResponse)
+async def sync_spotify_library(body: SpotifyImportRequest):
+    """
+    Sync user's top Spotify tracks to local database.
+
+    Fetches up to 50 of the user's most-listened tracks from Spotify,
+    converts their audio features to vectors, and adds them to the database.
+    If a song already exists, the user_id is merged into the user_ids list.
+
+    Args:
+        body.user_id: App user ID to associate with these songs
+        body.access_token: Spotify OAuth access token
+        body.limit: Number of top songs to fetch (default 50)
+
+    Returns:
+        Summary of songs added, merged, and any failures
+    """
+    try:
+        importer = SpotifyImporter(body.access_token)
+        tracks = await importer.get_tracks_with_vectors(limit=body.limit)
+
+        songs_added = 0
+        songs_merged = 0
+        failed_count = 0
+        added_tracks = []
+        merged_tracks = []
+
+        for track in tracks:
+            try:
+                track_id = track["track_id"]
+                vector = track["vector"]
+                name = track["name"]
+                artist = track["artist"]
+
+                # Check if song already exists
+                existing = await get_song(track_id)
+                
+                # Upsert with user_id (handles merge internally)
+                await upsert_song(
+                    track_id=track_id,
+                    vector=vector,
+                    name=name,
+                    artist=artist,
+                    genre=None,  # Spotify doesn't provide genre at track level
+                    user_id=body.user_id,
+                )
+
+                if existing is None:
+                    songs_added += 1
+                    added_tracks.append(track_id)
+                else:
+                    # Check if user was already in the list
+                    existing_user_ids = existing.get("user_ids", [])
+                    if body.user_id not in existing_user_ids:
+                        songs_merged += 1
+                        merged_tracks.append(track_id)
+
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to process track {track.get('track_id', 'unknown')}: {e}")
+                failed_count += 1
+
+        total_processed = len(tracks)
+
+        return SpotifySyncResponse(
+            user_id=body.user_id,
+            songs_added=songs_added,
+            songs_merged=songs_merged,
+            total_processed=total_processed,
+            failed_count=failed_count,
+            added_tracks=added_tracks,
+            merged_tracks=merged_tracks,
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to sync Spotify library: {str(e)}"
+        )
+
+@app.post("/songs/similar", response_model=SimilarResponse)
+async def similar(body: SimilarRequest):
+    """Return the k most similar songs to a given 12D feature vector via Actian VectorAI cosine search."""
+    results = await search_similar(query_vector=body.vector, top_k=body.k)
+
+    return SimilarResponse(
+        results=[
+            SimilarSong(track_id=r["track_id"], score=r["score"])
+            for r in results
+        ]
+    ) # do not use SimilarResponse(results = result) for validation using SimilarSong model
