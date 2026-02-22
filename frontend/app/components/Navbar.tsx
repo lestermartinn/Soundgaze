@@ -66,6 +66,11 @@ export default function Navbar() {
                 </span>
               </div>
             )}
+            {userName && (
+              <span className="font-black text-[10px] uppercase tracking-widest text-white/60">
+                {userName}
+              </span>
+            )}
             <button
               onClick={() => signOut({ callbackUrl: "http://127.0.0.1:3000" })}
               className="font-black text-xs uppercase tracking-widest px-4 py-2

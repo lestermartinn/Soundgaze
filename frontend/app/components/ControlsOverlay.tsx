@@ -19,7 +19,7 @@ interface ControlsOverlayProps {
 
 const MODES: { id: ExploreMode; label: string }[] = [
   { id: "manual", label: "Manual" },
-  { id: "random-walk", label: "Auto-Play" },
+  { id: "random-walk", label: "Journey" },
 ];
 
 // ---------------------------------------------------------------------------

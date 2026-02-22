@@ -409,7 +409,9 @@ export default function PointCloudViewer(props: PointCloudViewerProps) {
           dampingFactor={0.06}
           azimuthRotateSpeed={0.5}
           polarRotateSpeed={0.5}
-          dollySpeed={0.8}
+          dollySpeed={0.3}
+          minDistance={0.08}
+          maxDistance={3.5}
         />
       </Canvas>
 

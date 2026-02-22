@@ -248,23 +248,6 @@ export default function SongSidebar({
                 {isWalking ? "Restart Listening" : "Start Listening"}
               </button>
 
-              {isWalking && onRespawn && (
-                <button
-                  onClick={onRespawn}
-                  className="w-full font-black text-xs uppercase tracking-widest py-3 px-4
-                             border-2 transition-all
-                             hover:-translate-y-px active:translate-y-0"
-                  style={{
-                    backgroundColor: "transparent",
-                    borderColor: "rgba(168,85,247,0.5)",
-                    color: "rgba(168,85,247,0.9)",
-                    boxShadow: "3px 3px 0px 0px rgba(0,0,0,0.45)",
-                  }}
-                >
-                  Respawn To Seed
-                </button>
-              )}
-
               {isWalking && onNextStep && (
                 <button
                   onClick={onNextStep}

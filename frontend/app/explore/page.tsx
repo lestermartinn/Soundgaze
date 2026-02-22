@@ -345,14 +345,42 @@ export default function ExplorePage() {
           }}
         />
 
-        {/* ── Density slider — left edge, vertically centered ── */}
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 z-10">
+        {/* ── Density slider + legend — left edge ── */}
+        <div className="absolute left-4 z-10 flex flex-col gap-4" style={{ top: "50%", transform: "translateY(-55%)" }}>
           <DensitySlider
             value={pointDensity}
             onChange={setPointDensity}
             topology={topology}
             onTopologyChange={setTopology}
           />
+
+          {/* Legend */}
+          <div
+            className="flex flex-col gap-2 pl-4 pr-6 py-6 border-2 border-white/60"
+            style={{
+              width: "140px",
+              backgroundColor: "#080808",
+              boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.2), 4px 4px 0px 0px rgba(255,255,255,0.35)",
+            }}
+          >
+            {[
+              { color: "#1DB954", label: "Your Tracks" },
+              { color: "#FF2D2D", label: "Selected" },
+              { color: "#FF6B35", label: "Nearest" },
+              { color: "#A855F7", label: "Journey" },
+              { color: "#4a4a5a", label: "All Songs" },
+            ].map(({ color, label }) => (
+              <div key={label} className="flex items-center gap-2">
+                <span
+                  className="shrink-0 rounded-full"
+                  style={{ width: 8, height: 8, backgroundColor: color }}
+                />
+                <span className="font-black text-[9px] uppercase tracking-widest text-white/70">
+                  {label}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* ── Mode controls — bottom center ── */}

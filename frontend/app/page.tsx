@@ -12,8 +12,8 @@ import Waves from "./components/Waves";
 const FEATURES = [
   { countTo: null, suffix: "UMAP", label: "3D Vector Space", delay: 0 },
   { countTo: null, suffix: "AI", label: "Gemini Powered", delay: 120 },
-  { countTo: 30, suffix: "s", label: "Song Preview", delay: 240 },
-  { countTo: 30, suffix: "K", label: "Songs Mapped", delay: 360 },
+  { countTo: null, suffix: "↗", label: "Embedded Playback", delay: 240 },
+  { countTo: 100, suffix: "K", label: "Songs Mapped", delay: 360 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ export default function LandingPage() {
           >
             GAZE
           </span>
-          <p className="font-mono text-xs uppercase tracking-widest text-white/35 mt-6 pl-1 text-left">
+          <p className="font-mono text-sm uppercase tracking-widest text-white/55 mt-6 pl-1 text-left">
             Your music universe — visualised in 3D
           </p>
         </div>
