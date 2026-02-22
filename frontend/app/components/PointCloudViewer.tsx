@@ -33,6 +33,18 @@ export interface PointCloudViewerProps {
   selectedId?: string | null;
 }
 
+function getShiftedCoords(point: SongPoint, coordMode: "raw" | "uniform"): [number, number, number] | null {
+  const xyz = coordMode === "raw" ? point.xyz_raw : point.xyz_uniform;
+  if (!Array.isArray(xyz) || xyz.length < 3) return null;
+
+  const x = Number(xyz[0]);
+  const y = Number(xyz[1]);
+  const z = Number(xyz[2]);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+
+  return [x - 0.5, y - 0.5, z - 0.5];
+}
+
 function WalkPathOverlay({
   globalPoints,
   walkPathIds,
@@ -50,25 +62,39 @@ function WalkPathOverlay({
   const nextGlowRef = useRef<THREE.Mesh>(null);
   const arrowRef = useRef<THREE.Mesh>(null);
 
+  const byId = useMemo(() => new Map(globalPoints.map((p) => [p.track_id, p])), [globalPoints]);
+
+  const toVec3 = useCallback((song: SongPoint) => {
+    const shifted = getShiftedCoords(song, coordMode);
+    if (!shifted) return null;
+    return new THREE.Vector3(shifted[0], shifted[1], shifted[2]);
+  }, [coordMode]);
+
+  const safeIndex = Math.max(0, walkProgress ?? 0);
+  const currentId = walkPathIds && walkPathIds.length > 0
+    ? walkPathIds[Math.min(safeIndex, walkPathIds.length - 1)] ?? null
+    : null;
+  const nextId = walkPathIds && walkPathIds.length > safeIndex + 1
+    ? walkPathIds[safeIndex + 1] ?? null
+    : null;
+
+  const currentPoint = currentId ? byId.get(currentId) ?? null : null;
+  const nextPointSong = nextId ? byId.get(nextId) ?? null : null;
+  const currentPointVec = currentPoint ? toVec3(currentPoint) : null;
+  const nextPointVec = nextPointSong ? toVec3(nextPointSong) : null;
+
   const orderedPoints = useMemo(() => {
     if (!walkPathIds || walkPathIds.length < 2) return [] as THREE.Vector3[];
-    const byId = new Map(globalPoints.map((p) => [p.track_id, p]));
     return walkPathIds
       .map((id) => byId.get(id))
       .filter((p): p is SongPoint => !!p)
-      .map((p) => {
-        const xyz = coordMode === "raw" ? p.xyz_raw : p.xyz_uniform;
-        return new THREE.Vector3(xyz[0] - 0.5, xyz[1] - 0.5, xyz[2] - 0.5);
-      });
-  }, [walkPathIds, globalPoints, coordMode]);
+      .map((p) => toVec3(p))
+      .filter((p): p is THREE.Vector3 => !!p);
+  }, [walkPathIds, byId, toVec3]);
 
   const visibleCount = Math.min(orderedPoints.length, Math.max(1, walkProgress + 1));
   const visiblePoints = useMemo(() => orderedPoints.slice(0, visibleCount), [orderedPoints, visibleCount]);
-  const currentPoint = visiblePoints.length > 0 ? visiblePoints[visiblePoints.length - 1] : null;
-  const nextPoint = useMemo(() => {
-    const idx = Math.max(0, (walkProgress ?? 0) + 1);
-    return idx < orderedPoints.length ? orderedPoints[idx] : null;
-  }, [orderedPoints, walkProgress]);
+
   useEffect(() => {
     if (lineRef.current) {
       lineRef.current.computeLineDistances();
@@ -82,27 +108,27 @@ function WalkPathOverlay({
       material.dashOffset = -t * 0.8;
     }
 
-    if (headRef.current && currentPoint) {
-      headRef.current.position.copy(currentPoint);
+    if (headRef.current && currentPointVec) {
+      headRef.current.position.copy(currentPointVec);
       const pulse = 1 + 0.22 * (0.5 + 0.5 * Math.sin(t * 6));
       headRef.current.scale.setScalar(pulse);
     }
 
-    if (nextRef.current && nextPoint) {
-      nextRef.current.position.copy(nextPoint);
+    if (nextRef.current && nextPointVec) {
+      nextRef.current.position.copy(nextPointVec);
       const pulse = 1 + 0.22 * (0.5 + 0.5 * Math.sin(t * 5.2));
       nextRef.current.scale.setScalar(pulse);
     }
 
-    if (nextGlowRef.current && nextPoint) {
-      nextGlowRef.current.position.copy(nextPoint);
+    if (nextGlowRef.current && nextPointVec) {
+      nextGlowRef.current.position.copy(nextPointVec);
       const glowPulse = 1 + 0.3 * (0.5 + 0.5 * Math.sin(t * 4.1));
       nextGlowRef.current.scale.setScalar(glowPulse);
     }
 
-    if (arrowRef.current && currentPoint && nextPoint) {
-      const dir = new THREE.Vector3().subVectors(nextPoint, currentPoint).normalize();
-      const arrowPos = new THREE.Vector3().copy(nextPoint).addScaledVector(dir, -0.0075);
+    if (arrowRef.current && currentPointVec && nextPointVec) {
+      const dir = new THREE.Vector3().subVectors(nextPointVec, currentPointVec).normalize();
+      const arrowPos = new THREE.Vector3().copy(nextPointVec).addScaledVector(dir, -0.0075);
       arrowRef.current.position.copy(arrowPos);
       arrowRef.current.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
       const arrowPulse = 1 + 0.12 * (0.5 + 0.5 * Math.sin(t * 7));
@@ -143,7 +169,7 @@ function WalkPathOverlay({
         <meshBasicMaterial color="#FF2D2D" transparent opacity={1} />
       </mesh>
 
-      {nextPoint && (
+      {nextPointVec && (
         <>
           <mesh ref={nextRef}>
             <sphereGeometry args={[0.0076, 16, 16]} />
@@ -235,23 +261,31 @@ function PointCloud({
     return globalPoints.find((p) => p.track_id === selectedId) ?? null;
   }, [globalPoints, selectedId]);
 
+  const renderPoints = useMemo(() => {
+    return globalPoints
+      .map((point) => {
+        const shifted = getShiftedCoords(point, coordMode);
+        return shifted ? { point, shifted } : null;
+      })
+      .filter((entry): entry is { point: SongPoint; shifted: [number, number, number] } => !!entry);
+  }, [globalPoints, coordMode]);
+
   const { positions, colors } = useMemo(() => {
-    const pos = new Float32Array(globalPoints.length * 3);
-    const col = new Float32Array(globalPoints.length * 3);
+    const pos = new Float32Array(renderPoints.length * 3);
+    const col = new Float32Array(renderPoints.length * 3);
 
-    globalPoints.forEach((p, i) => {
-      const xyz = coordMode === "raw" ? p.xyz_raw : p.xyz_uniform;
-      pos[i * 3] = xyz[0] - 0.5;
-      pos[i * 3 + 1] = xyz[1] - 0.5;
-      pos[i * 3 + 2] = xyz[2] - 0.5;
+    renderPoints.forEach(({ point, shifted }, i) => {
+      pos[i * 3] = shifted[0];
+      pos[i * 3 + 1] = shifted[1];
+      pos[i * 3 + 2] = shifted[2];
 
-      const c = walkCurrentId === p.track_id
+      const c = walkCurrentId === point.track_id
         ? COLOR_CURRENT
-        : walkIds.has(p.track_id)
+        : walkIds.has(point.track_id)
           ? COLOR_WALK
-        : !walkActive && neighborIds.has(p.track_id)
+        : !walkActive && neighborIds.has(point.track_id)
           ? COLOR_NEIGHBOR
-          : userSongIds.has(p.track_id)
+          : userSongIds.has(point.track_id)
             ? COLOR_USER
             : COLOR_GLOBAL;
 
@@ -261,7 +295,7 @@ function PointCloud({
     });
 
     return { positions: pos, colors: col };
-  }, [globalPoints, userSongIds, neighborIds, walkIds, walkActive, walkCurrentId, coordMode]);
+  }, [renderPoints, userSongIds, neighborIds, walkIds, walkActive, walkCurrentId]);
 
   // Screen-space hover: project every point to NDC each frame and find the
   // nearest to the cursor in 2D. Immune to 3D threshold issues.
@@ -279,7 +313,7 @@ function PointCloud({
     let bestIdx = -1;
     let bestDist = Infinity;
 
-    for (let i = 0; i < globalPoints.length; i++) {
+    for (let i = 0; i < renderPoints.length; i++) {
       tempVec.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
       tempVec.project(camera);
       if (tempVec.z > 1) continue;
@@ -293,10 +327,12 @@ function PointCloud({
       }
     }
 
-    const found = bestIdx >= 0 ? globalPoints[bestIdx] : null;
+    const found = bestIdx >= 0 ? renderPoints[bestIdx].point : null;
     hoveredRef.current = found;
     onHover(found);
   });
+
+  const selectedShifted = selectedPoint ? getShiftedCoords(selectedPoint, coordMode) : null;
 
   return (
     <>
@@ -316,11 +352,11 @@ function PointCloud({
           opacity={0.9}
         />
       </points>
-      {!walkActive && selectedPoint && (
+      {!walkActive && selectedPoint && selectedShifted && (
         <mesh position={[
-          (coordMode === "raw" ? selectedPoint.xyz_raw[0] : selectedPoint.xyz_uniform[0]) - 0.5,
-          (coordMode === "raw" ? selectedPoint.xyz_raw[1] : selectedPoint.xyz_uniform[1]) - 0.5,
-          (coordMode === "raw" ? selectedPoint.xyz_raw[2] : selectedPoint.xyz_uniform[2]) - 0.5,
+          selectedShifted[0],
+          selectedShifted[1],
+          selectedShifted[2],
         ]}>
           <sphereGeometry args={[0.009, 16, 16]} />
           <meshBasicMaterial color="#FF2D2D" transparent opacity={1} />
