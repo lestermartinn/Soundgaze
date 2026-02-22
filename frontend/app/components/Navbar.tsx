@@ -1,44 +1,26 @@
 "use client";
 
-import { useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
+import Link from "next/link";
 
 export default function Navbar() {
   const { data: session, status } = useSession();
   const isLoading = status === "loading";
   const isAuthenticated = status === "authenticated";
   const userName = session?.user?.name;
-  const spotifyId = session?.spotifyId;
-  const accessToken = session?.accessToken;
-  const [copiedId, setCopiedId] = useState(false);
-  const [copiedToken, setCopiedToken] = useState(false);
   const userImage = session?.user?.image;
-
-  function copySpotifyId() {
-    if (!spotifyId) return;
-    navigator.clipboard.writeText(spotifyId).then(() => {
-      setCopiedId(true);
-      setTimeout(() => setCopiedId(false), 2000);
-    });
-  }
-
-  function copyAccessToken() {
-    if (!accessToken) return;
-    navigator.clipboard.writeText(accessToken).then(() => {
-      setCopiedToken(true);
-      setTimeout(() => setCopiedToken(false), 2000);
-    });
-  }
 
   return (
     <nav className="relative z-20 flex items-center justify-between px-6 h-14 bg-spotify-black shrink-0">
 
       {/* ── Left: Wordmark + Live Data ── */}
       <div className="flex items-center gap-3">
-        <span className="w-3 h-8 bg-spotify-green" />
-        <span className="font-black text-xl uppercase tracking-widest text-white">
+        <Link
+          href="/"
+          className="font-black text-xl uppercase tracking-widest text-white hover:text-spotify-green transition-colors"
+        >
           Soundgaze
-        </span>
+        </Link>
         <div className="hidden md:flex items-center gap-2 ml-2">
           <span className="relative flex h-2 w-2 shrink-0">
             <span
@@ -83,28 +65,6 @@ export default function Navbar() {
                   {userName?.[0] ?? "?"}
                 </span>
               </div>
-            )}
-            {spotifyId && (
-              <button
-                onClick={copySpotifyId}
-                title="Click to copy Spotify user ID"
-                className="hidden sm:block font-mono text-xs text-white/30 hover:text-white/60
-                           transition-colors border border-white/10 hover:border-white/30
-                           px-2 py-1 leading-none"
-              >
-                {copiedId ? "✓ Copied" : `ID: ${spotifyId}`}
-              </button>
-            )}
-            {accessToken && (
-              <button
-                onClick={copyAccessToken}
-                title="Click to copy Spotify access token"
-                className="hidden sm:block font-mono text-xs text-white/30 hover:text-white/60
-                           transition-colors border border-white/10 hover:border-white/30
-                           px-2 py-1 leading-none"
-              >
-                {copiedToken ? "✓ Token Copied" : "Copy Token"}
-              </button>
             )}
             <button
               onClick={() => signOut({ callbackUrl: "http://127.0.0.1:3000" })}
