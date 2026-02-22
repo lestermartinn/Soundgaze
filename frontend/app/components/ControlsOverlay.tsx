@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import gsap from "gsap";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -10,7 +11,6 @@ export type ExploreMode = "manual" | "random-walk" | "auto-play";
 
 interface ControlsOverlayProps {
   onModeChange?: (mode: ExploreMode) => void;
-  onDensityChange?: (density: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -29,103 +29,95 @@ const IDLE_TIMEOUT_MS = 15_000;
 // Component
 // ---------------------------------------------------------------------------
 
-export default function ControlsOverlay({ onModeChange, onDensityChange }: ControlsOverlayProps) {
-  const [mode, setMode] = useState<ExploreMode>("manual");
-  const [density, setDensity] = useState(50);
-  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+export default function ControlsOverlay({ onModeChange }: ControlsOverlayProps) {
+  const [mode,         setMode]         = useState<ExploreMode>("manual");
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const idleTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pillNavRef = useRef<HTMLDivElement>(null);
+  const pillRef    = useRef<HTMLDivElement>(null);
+  const btnRefs    = useRef<(HTMLButtonElement | null)[]>([]);
 
-  // Switch mode and propagate upward
+  function movePill(index: number) {
+    const btn  = btnRefs.current[index];
+    const nav  = pillNavRef.current;
+    const pill = pillRef.current;
+    if (!btn || !nav || !pill) return;
+    const navRect = nav.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    gsap.to(pill, { x: btnRect.left - navRect.left, width: btnRect.width, duration: 0.3, ease: "power2.out" });
+  }
+
   const applyMode = useCallback(
     (next: ExploreMode) => {
       setMode(next);
       onModeChange?.(next);
+      movePill(MODES.findIndex((m) => m.id === next));
     },
-    [onModeChange]
+    [onModeChange],
   );
 
-  // Reset the 15-second idle timer; only auto-switch if user is in manual mode
   const resetIdleTimer = useCallback(() => {
     if (idleTimer.current) clearTimeout(idleTimer.current);
     idleTimer.current = setTimeout(() => {
       setMode((prev) => {
-        if (prev === "manual") {
-          onModeChange?.("random-walk");
-          return "random-walk";
-        }
-        return prev;
+        if (prev !== "manual") return prev;
+        onModeChange?.("random-walk");
+        movePill(MODES.findIndex((m) => m.id === "random-walk"));
+        return "random-walk";
       });
     }, IDLE_TIMEOUT_MS);
   }, [onModeChange]);
 
-  // Attach window-level interaction listeners for idle detection
+  // Seed pill on first render
   useEffect(() => {
-    const events: (keyof WindowEventMap)[] = [
-      "mousemove",
-      "mousedown",
-      "keydown",
-      "touchstart",
-    ];
-    events.forEach((e) =>
-      window.addEventListener(e, resetIdleTimer, { passive: true })
-    );
-    resetIdleTimer(); // kick off the timer on mount
+    const id = requestAnimationFrame(() => movePill(0));
+    return () => cancelAnimationFrame(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  useEffect(() => {
+    const events: (keyof WindowEventMap)[] = ["mousemove", "mousedown", "keydown", "touchstart"];
+    events.forEach((e) => window.addEventListener(e, resetIdleTimer, { passive: true }));
+    resetIdleTimer();
     return () => {
       events.forEach((e) => window.removeEventListener(e, resetIdleTimer));
       if (idleTimer.current) clearTimeout(idleTimer.current);
     };
   }, [resetIdleTimer]);
 
-  function handleDensityChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const val = Number(e.target.value);
-    setDensity(val);
-    onDensityChange?.(val);
-  }
-
   return (
     <div
-      className="flex items-center gap-4 px-5 py-3
+      ref={pillNavRef}
+      className="relative flex items-center p-1.5
                  bg-near-black border-4 border-black
                  shadow-[6px_6px_0px_0px_#1DB954]"
+      onMouseLeave={() => {
+        setHoveredIndex(null);
+        movePill(MODES.findIndex((m) => m.id === mode));
+      }}
     >
-      {/* ── Mode toggle ── */}
-      <div className="flex border-2 border-black overflow-hidden">
-        {MODES.map(({ id, label }, i) => (
+      {/* Sliding pill */}
+      <div
+        ref={pillRef}
+        className="absolute top-1.5 bottom-1.5 pointer-events-none border-2 border-black"
+        style={{ backgroundColor: "#1DB954" }}
+      />
+
+      {MODES.map(({ id, label }, i) => {
+        const onPill = hoveredIndex !== null ? hoveredIndex === i : mode === id;
+        return (
           <button
             key={id}
+            ref={(el) => { btnRefs.current[i] = el; }}
             onClick={() => applyMode(id)}
-            className={`font-black text-xs uppercase tracking-widest px-3 py-2 transition-colors
-                        ${i !== 0 ? "border-l-2 border-black" : ""}
-                        ${mode === id
-                          ? "bg-spotify-green text-black"
-                          : "bg-transparent text-white hover:bg-white/10"
-                        }`}
+            onMouseEnter={() => { setHoveredIndex(i); movePill(i); }}
+            className="relative z-10 px-8 py-3 font-black text-sm uppercase tracking-widest select-none transition-colors duration-100"
+            style={{ color: onPill ? "#000" : "rgba(255,255,255,0.6)" }}
           >
             {label}
           </button>
-        ))}
-      </div>
-
-      {/* ── Divider ── */}
-      <div className="w-px h-5 bg-white/20" />
-
-      {/* ── Density slider ── */}
-      <div className="flex items-center gap-2">
-        <span className="font-black text-xs uppercase tracking-widest text-white/60 hidden sm:block">
-          Density
-        </span>
-        <input
-          type="range"
-          min={1}
-          max={100}
-          value={density}
-          onChange={handleDensityChange}
-          className="w-28 accent-[#1DB954] cursor-pointer"
-        />
-        <span className="font-mono text-xs text-white/40 w-7 text-right tabular-nums">
-          {density}
-        </span>
-      </div>
+        );
+      })}
     </div>
   );
 }

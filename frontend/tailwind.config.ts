@@ -9,7 +9,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // --- Soundscape Design System ---
+        // --- Soundgaze Design System ---
         "spotify-green": "#1DB954",
         "near-black":    "#0a0a0a",
         "spotify-black": "#191414",

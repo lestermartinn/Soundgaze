@@ -1,8 +1,15 @@
 import NextAuth from "next-auth";
 import SpotifyProvider from "next-auth/providers/spotify";
 
-const SPOTIFY_SCOPES =
-  "user-read-private user-read-email user-library-modify user-top-read streaming";
+const SPOTIFY_SCOPES = [
+  "user-read-private",
+  "user-read-email",
+  "user-library-modify",
+  "user-top-read",
+  "user-read-recently-played",
+  "user-library-read",
+  "streaming",
+].join(" ");
 
 const handler = NextAuth({
   // Force plain (non-__Secure-prefixed) cookies for local HTTP dev on 127.0.0.1

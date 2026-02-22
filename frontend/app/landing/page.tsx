@@ -1,20 +1,68 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import MarqueeTicker from "../components/MarqueeTicker";
+import Waves from "../components/Waves";
+import Magnet from "../components/Magnet";
 
 // ---------------------------------------------------------------------------
-// Feature callouts
+// Feature callouts — stat drives the animated counter
 // ---------------------------------------------------------------------------
 
 const FEATURES = [
-  { label: "50M+ Tracks",        detail: "Mapped in 3D space"          },
-  { label: "UMAP Clustering",    detail: "Songs grouped by similarity"  },
-  { label: "AI Context",         detail: "Gemini cultural descriptions" },
-  { label: "Spotify Native",     detail: "Save directly to your library"},
+  { countTo: 50, suffix: "M+", label: "Tracks", detail: "Mapped in 3D space", delay: 0 },
+  { countTo: 3, suffix: "D", label: "UMAP Space", detail: "12-dim audio → 3D cluster", delay: 120 },
+  { countTo: null, suffix: "AI", label: "Context", detail: "Gemini cultural descriptions", delay: 240 },
+  { countTo: 1, suffix: "×", label: "Click Save", detail: "Save directly to your library", delay: 360 },
 ];
+
+// ---------------------------------------------------------------------------
+// Animated counter — eases from 0 → target on mount
+// ---------------------------------------------------------------------------
+
+function AnimatedStat({
+  countTo, suffix, delay,
+}: { countTo: number | null; suffix: string; delay: number }) {
+  const [value, setValue] = useState(0);
+
+  useEffect(() => {
+    if (countTo === null) return;
+    const DURATION = 1400;
+    let raf: number;
+    let startTime: number | null = null;
+
+    const timer = setTimeout(() => {
+      function step(ts: number) {
+        if (!startTime) startTime = ts;
+        const progress = Math.min((ts - startTime) / DURATION, 1);
+        const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+        setValue(Math.round(eased * countTo!));
+        if (progress < 1) raf = requestAnimationFrame(step);
+      }
+      raf = requestAnimationFrame(step);
+    }, delay);
+
+    return () => { clearTimeout(timer); cancelAnimationFrame(raf); };
+  }, [countTo, delay]);
+
+  if (countTo === null) {
+    // Non-numeric stat — just display the suffix with a subtle fade-in
+    return (
+      <span className="font-black text-2xl text-white leading-none tracking-tight">
+        {suffix}
+      </span>
+    );
+  }
+
+  return (
+    <span className="font-black text-2xl text-white leading-none tracking-tight">
+      {value}
+      <span style={{ color: "#1DB954" }}>{suffix}</span>
+    </span>
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // Page
@@ -24,109 +72,142 @@ export default function LandingPage() {
   const { status } = useSession();
   const router = useRouter();
 
-  // Already authenticated — skip straight to the explorer
   useEffect(() => {
     if (status === "authenticated") router.replace("/");
   }, [status, router]);
 
   return (
-    <div className="relative w-screen h-screen bg-near-black overflow-hidden flex flex-col">
-
-      {/* ── Top marquee ── */}
-      <MarqueeTicker
-        text="SOUNDSCAPE • MUSIC UNIVERSE EXPLORER • DISCOVER YOUR SOUND •"
-        variant="green"
-        speed="medium"
-        tilt={0}
+    <div
+      className="relative w-screen h-screen overflow-hidden flex flex-col"
+      style={{ backgroundColor: "#080808" }}
+    >
+      {/* ── Diagonal background: grey lower-left, green upper-right ── */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: `
+            radial-gradient(ellipse 60% 65% at 90% 15%, rgba(29,185,84,0.65) 0%, rgba(29,185,84,0.20) 48%, transparent 68%),
+            radial-gradient(ellipse 58% 62% at 3% 92%, rgba(210,210,210,0.45) 0%, rgba(140,140,140,0.18) 52%, transparent 70%)
+          `,
+        }}
       />
 
-      {/* ── Hero ── */}
-      <main className="flex-1 flex flex-col items-center justify-center px-6 gap-10">
+      {/* ── Waves background ── */}
+      <Waves
+        lineColor="rgba(29, 185, 84, 0.45)"
+        backgroundColor="transparent"
+        waveSpeedX={0.0125}
+        waveSpeedY={0.01}
+        waveAmpX={40}
+        waveAmpY={20}
+        friction={0.9}
+        tension={0.01}
+        maxCursorMove={120}
+        xGap={12}
+        yGap={36}
+        style={{ zIndex: 1 }}
+      />
 
-        {/* Wordmark block */}
-        <div className="flex flex-col items-start gap-1 select-none">
-          <div className="flex items-center gap-4">
+{/* ── Main content — sits above wave (z-10 > wave z-1) ── */}
+      <main className="relative z-10 flex-1 flex items-stretch px-10 lg:px-16 py-6 gap-8">
+
+        {/* Left — Wordmark + tagline */}
+        {/* justify-center + pb pushes content above centre */}
+        <div className="flex flex-col justify-center pb-72 pl-6 flex-1 min-w-0">
+          {/* SOUND with green vertical bar to its right */}
+          <div className="flex items-start leading-none">
             <span
-              className="font-black uppercase leading-none tracking-tighter text-white"
-              style={{ fontSize: "clamp(4rem, 12vw, 9rem)" }}
+              className="font-black uppercase text-white leading-none tracking-tight"
+              style={{ fontSize: "clamp(3rem, 9vw, 7.5rem)" }}
             >
-              Sound
+              SOUND
             </span>
-            {/* Green accent bar */}
             <span
-              className="bg-spotify-green border-4 border-black self-stretch"
-              style={{ width: "clamp(14px, 2vw, 28px)" }}
+              className="shrink-0 ml-2 mt-1"
+              style={{
+                width: "clamp(4px, 0.45vw, 7px)",
+                height: "clamp(2.5rem, 7vw, 6rem)",
+                backgroundColor: "#1DB954",
+              }}
             />
           </div>
+
+          {/* SCAPE */}
           <span
-            className="font-black uppercase leading-none tracking-tighter text-white"
-            style={{ fontSize: "clamp(4rem, 12vw, 9rem)" }}
+            className="font-black uppercase text-white leading-none tracking-tight"
+            style={{ fontSize: "clamp(3rem, 9vw, 7.5rem)", marginTop: "-0.05em" }}
           >
-            Scape
+            GAZE
           </span>
-          <p className="font-mono font-bold text-sm uppercase tracking-widest text-white/40 mt-2">
+
+          {/* Tagline */}
+          <p className="font-mono text-xs uppercase tracking-widest text-white/35 mt-4">
             Your music universe — visualised in 3D
           </p>
         </div>
 
-        {/* CTA */}
-        <div className="flex flex-col items-center gap-3">
-          <button
-            onClick={() => signIn("spotify", { callbackUrl: "/" })}
-            disabled={status === "loading"}
-            className="font-black text-sm uppercase tracking-widest px-8 py-4
-                       border-4 border-black
-                       shadow-[6px_6px_0px_0px_#000]
-                       hover:shadow-[8px_8px_0px_0px_#000] hover:-translate-y-px
-                       active:shadow-none active:translate-y-0
-                       transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ backgroundColor: "#1DB954", color: "#000" }}
-          >
-            {status === "loading" ? "Connecting..." : "Connect Spotify →"}
-          </button>
-          <span className="font-mono text-xs text-white/30 uppercase tracking-widest">
-            Free account works · No credit card
-          </span>
+        {/* Right — CTA + features, shifted left to sit within the wave */}
+        {/* justify-center + pt pushes content below centre */}
+        <div className="flex flex-col justify-center items-center pt-72 pr-6 gap-5 w-[44rem] shrink-0">
 
-          {/* Dev-only bypass — automatically inactive in production builds */}
-          {process.env.NODE_ENV === "development" && (
+          {/* CTA block — centered above feature grid */}
+          <div className="flex flex-col items-center gap-3 w-full">
             <button
-              onClick={() => router.push("/")}
-              className="font-mono text-xs text-white/20 hover:text-white/50
-                         underline underline-offset-4 transition-colors mt-2"
+              onClick={() => signIn("spotify", { callbackUrl: "/" })}
+              disabled={status === "loading"}
+              className="font-black text-sm uppercase tracking-widest px-8 py-4
+                         border-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed
+                         hover:-translate-y-px active:translate-y-0"
+              style={{
+                backgroundColor: "#1DB954",
+                color: "#000",
+                borderColor: "#1DB954",
+                boxShadow: "0 0 0 2px #000",
+              }}
             >
-              [dev] skip auth →
+              {status === "loading" ? "Connecting..." : "CONNECT SPOTIFY →"}
             </button>
-          )}
-        </div>
 
-        {/* Feature grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full max-w-2xl">
-          {FEATURES.map(({ label, detail }) => (
-            <div
-              key={label}
-              className="border-2 border-white/10 p-3 flex flex-col gap-1
-                         hover:border-spotify-green transition-colors"
-            >
-              <span className="font-black text-xs uppercase tracking-widest text-white">
-                {label}
-              </span>
-              <span className="font-mono text-xs text-white/40 leading-snug">
-                {detail}
-              </span>
-            </div>
-          ))}
-        </div>
+            <span className="font-mono text-xs tracking-widest text-white/30 uppercase">
+              Free account works · No credit card
+            </span>
 
+            {/* Dev-only bypass */}
+            {process.env.NODE_ENV === "development" && (
+              <button
+                onClick={() => router.push("/")}
+                className="font-mono text-xs text-white/20 hover:text-white/50 transition-colors"
+              >
+                [dev] skip auth →
+              </button>
+            )}
+          </div>
+
+          {/* Feature cards — animated stat hero + label + detail */}
+          <div className="grid grid-cols-4 gap-3 w-full">
+            {FEATURES.map(({ countTo, suffix, label, detail, delay }) => (
+              <div
+                key={label}
+                className="flex flex-col gap-2 p-4 border min-h-[100px] transition-colors"
+                style={{
+                  borderColor: "rgba(29,185,84,0.40)",
+                  backgroundColor: "rgba(0,0,0,0.45)",
+                }}
+              >
+                <AnimatedStat countTo={countTo} suffix={suffix} delay={delay} />
+                <span className="font-black text-xs uppercase tracking-normal text-white leading-snug">
+                  {label}
+                </span>
+                <span className="font-mono text-xs text-white/40 leading-snug break-words">
+                  {detail}
+                </span>
+              </div>
+            ))}
+          </div>
+
+        </div>
       </main>
 
-      {/* ── Bottom marquee ── */}
-      <MarqueeTicker
-        text="EXPLORE • DISCOVER • CONNECT • VISUALISE • EXPLORE • DISCOVER • CONNECT •"
-        variant="black"
-        speed="fast"
-        tilt={0}
-      />
 
     </div>
   );

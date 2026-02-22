@@ -10,7 +10,7 @@ interface MarqueeTickerProps {
 }
 
 const DEFAULT_TEXT =
-  "EXPLORE • DISCOVER • SOUNDSCAPE • EXPLORE • DISCOVER • SOUNDSCAPE •";
+  "EXPLORE • DISCOVER • SOUNDGAZE • EXPLORE • DISCOVER • SOUNDGAZE •";
 
 const SPEED_CLASS = {
   slow:   "animate-marquee-slow",

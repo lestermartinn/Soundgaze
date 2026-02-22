@@ -4,9 +4,9 @@ import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Navbar from "./components/Navbar";
-import MarqueeTicker from "./components/MarqueeTicker";
 import PointCloudViewer from "./components/PointCloudViewer";
 import ControlsOverlay, { ExploreMode } from "./components/ControlsOverlay";
+import DensitySlider from "./components/DensitySlider";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,7 +37,7 @@ export default function ExplorePage() {
   // Controls state — Parker wires these into PointCloudViewer once ready
   const [exploreMode, setExploreMode] = useState<ExploreMode>("manual");
   const [pointDensity, setPointDensity] = useState(50);
-  void exploreMode;   // suppress unused-var warning until Parker consumes these
+  void exploreMode;
   void pointDensity;
 
   const isDev = process.env.NODE_ENV === "development";
@@ -46,18 +46,11 @@ export default function ExplorePage() {
     if (status === "unauthenticated" && !isDev) router.replace("/landing");
   }, [status, router, isDev]);
 
-  // Render nothing while session is resolving or redirect is in flight
   if (status === "loading") return null;
   if (status === "unauthenticated" && !isDev) return null;
 
-  // Called by Three.js (Parker) when a point is clicked.
-  // Lester owns this callback — it bridges the canvas to the sidebar.
   function onSongSelect(songId: string) {
-    setSelectedSong({ id: songId });
     setSidebarOpen(true);
-
-    // TODO: fetch real song details from GET /api/py/song/{id}/details
-    // For now, populate with placeholder so sidebar renders during development.
     setSelectedSong({
       id: songId,
       title: "Song Title",
@@ -99,20 +92,36 @@ export default function ExplorePage() {
       {/* ── Navbar ── */}
       <Navbar />
 
-      {/* ── Ticker (sits just below navbar) ── */}
-      <MarqueeTicker
-        text="EXPLORE THE UNIVERSE • DISCOVER NEW SOUNDS • SOUNDSCAPE •"
-        variant="black"
-        speed="slow"
-        tilt={0}
-      />
-
-      {/* ── Canvas + Sidebar layer ── */}
+      {/* ── Canvas + overlays layer ── */}
       <div className="relative flex-1 overflow-hidden">
 
         {/* Three.js canvas — Parker mounts into this div */}
         <div id="canvas-container" className="absolute inset-0 z-0">
           <PointCloudViewer onPointClick={onSongSelect} />
+        </div>
+
+        {/* ── Corner green vignettes ── */}
+        <div
+          className="absolute inset-0 z-0 pointer-events-none"
+          style={{
+            background: `
+              radial-gradient(ellipse 18% 22% at 0% 0%,    rgba(29,185,84,0.20) 0%, transparent 100%),
+              radial-gradient(ellipse 18% 22% at 100% 0%,  rgba(29,185,84,0.20) 0%, transparent 100%),
+              radial-gradient(ellipse 18% 22% at 0% 100%,  rgba(29,185,84,0.20) 0%, transparent 100%),
+              radial-gradient(ellipse 18% 22% at 100% 100%,rgba(29,185,84,0.20) 0%, transparent 100%)
+            `,
+            boxShadow: "inset 0 0 60px rgba(29,185,84,0.15)",
+          }}
+        />
+
+        {/* ── Density slider — left edge, vertically centered ── */}
+        <div className="absolute left-4 top-1/2 -translate-y-1/2 z-10">
+          <DensitySlider value={pointDensity} onChange={setPointDensity} />
+        </div>
+
+        {/* ── Mode controls — bottom center ── */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
+          <ControlsOverlay onModeChange={setExploreMode} />
         </div>
 
         {/* ── Sidebar — slides in from right on song select ── */}
@@ -199,14 +208,6 @@ export default function ExplorePage() {
             )}
           </div>
         </aside>
-
-        {/* ── Controls overlay — bottom center ── */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
-          <ControlsOverlay
-            onModeChange={setExploreMode}
-            onDensityChange={setPointDensity}
-          />
-        </div>
 
       </div>
     </main>

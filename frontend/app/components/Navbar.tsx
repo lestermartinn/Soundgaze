@@ -9,13 +9,23 @@ export default function Navbar() {
   const isAuthenticated = status === "authenticated";
   const userName = session?.user?.name;
   const spotifyId = session?.spotifyId;
-  const [copied, setCopied] = useState(false);
+  const accessToken = session?.accessToken;
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedToken, setCopiedToken] = useState(false);
 
   function copySpotifyId() {
     if (!spotifyId) return;
     navigator.clipboard.writeText(spotifyId).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    });
+  }
+
+  function copyAccessToken() {
+    if (!accessToken) return;
+    navigator.clipboard.writeText(accessToken).then(() => {
+      setCopiedToken(true);
+      setTimeout(() => setCopiedToken(false), 2000);
     });
   }
 
@@ -26,7 +36,7 @@ export default function Navbar() {
       <div className="flex items-center gap-3">
         <span className="w-3 h-8 bg-spotify-green border-2 border-black" />
         <span className="font-black text-xl uppercase tracking-widest text-white">
-          Soundscape
+          Soundgaze
         </span>
       </div>
 
@@ -49,7 +59,18 @@ export default function Navbar() {
                            transition-colors border border-white/10 hover:border-white/30
                            px-2 py-1 leading-none"
               >
-                {copied ? "✓ Copied" : `ID: ${spotifyId}`}
+                {copiedId ? "✓ Copied" : `ID: ${spotifyId}`}
+              </button>
+            )}
+            {accessToken && (
+              <button
+                onClick={copyAccessToken}
+                title="Click to copy Spotify access token"
+                className="hidden sm:block font-mono text-xs text-white/30 hover:text-white/60
+                           transition-colors border border-white/10 hover:border-white/30
+                           px-2 py-1 leading-none"
+              >
+                {copiedToken ? "✓ Token Copied" : "Copy Token"}
               </button>
             )}
             <button

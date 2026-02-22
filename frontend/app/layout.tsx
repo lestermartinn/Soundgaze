@@ -11,7 +11,7 @@ const syne = Syne({
 });
 
 export const metadata: Metadata = {
-  title: "Soundscape — Music Universe Explorer",
+  title: "Soundgaze — Music Universe Explorer",
   description: "Navigate a 3D universe of songs. Explore, discover, and save music.",
 };
 
