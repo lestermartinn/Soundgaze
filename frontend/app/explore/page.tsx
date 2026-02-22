@@ -8,7 +8,7 @@ import PointCloudViewer from "../components/PointCloudViewer";
 import ControlsOverlay, { ExploreMode } from "../components/ControlsOverlay";
 import DensitySlider, { Topology } from "../components/DensitySlider";
 import SongSidebar, { SongData } from "../components/SongSidebar";
-import { fetchPoints, fetchSimilar, type SongPoint } from "../lib/api";
+import { fetchPoints, fetchSimilar, fetchWalk, type SongPoint, type WalkStep } from "../lib/api";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -29,6 +29,13 @@ export default function ExplorePage() {
   const [sidebarOpen, setSidebarOpen]   = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
   const [saveStatus, setSaveStatus]     = useState<"idle" | "saved" | "error">("idle");
+
+  // Walk
+  const [walkPoints, setWalkPoints]       = useState<SongPoint[]>([]);
+  const [walkIds, setWalkIds]             = useState<Set<string>>(new Set());
+  const [walkSteps, setWalkSteps]         = useState<WalkStep[]>([]);
+  const [isWalking, setIsWalking]         = useState(false);
+  const [walkStepIndex, setWalkStepIndex] = useState(0);
 
   // Controls
   const [exploreMode, setExploreMode]   = useState<ExploreMode>("manual");
@@ -125,6 +132,62 @@ export default function ExplorePage() {
     setNeighborIds(new Set());
     setNeighborPoints([]);
     setSaveStatus("idle");
+    setWalkIds(new Set());
+    setWalkPoints([]);
+    setWalkSteps([]);
+    setIsWalking(false);
+    setWalkStepIndex(0);
+  }
+
+  async function startWalk() {
+    if (!selectedSong) return;
+    setIsWalking(true);
+    setWalkStepIndex(0);
+    try {
+      const result = await fetchWalk(selectedSong.id, { steps: 10, temperature: 0.5 });
+      const steps = result.path.slice(1); // skip step 0 (seed song)
+
+      const existingIds = new Set([...globalPoints, ...neighborPoints].map((p) => p.track_id));
+      const newWalkPoints: SongPoint[] = [];
+      const allWalkIds = new Set<string>();
+
+      for (const step of steps) {
+        allWalkIds.add(step.track_id);
+        if (!existingIds.has(step.track_id) && step.xyz_raw && step.xyz_uniform) {
+          newWalkPoints.push({
+            track_id:    step.track_id,
+            name:        step.name    ?? "",
+            artist:      step.artist  ?? "",
+            genre:       step.genre   ?? "",
+            xyz_raw:     step.xyz_raw     as [number, number, number],
+            xyz_uniform: step.xyz_uniform as [number, number, number],
+          });
+        }
+      }
+
+      setWalkIds(allWalkIds);
+      setWalkPoints(newWalkPoints);
+      setWalkSteps(steps);
+    } catch (err) {
+      console.error("fetchWalk failed", err);
+      setIsWalking(false);
+    }
+  }
+
+  async function nextStep() {
+    if (walkStepIndex >= walkSteps.length) return;
+    const step = walkSteps[walkStepIndex];
+    setWalkStepIndex((i) => i + 1);
+    const point = [...globalPoints, ...neighborPoints, ...walkPoints].find(
+      (p) => p.track_id === step.track_id,
+    );
+    if (point) {
+      await onSongSelect(point);
+    } else {
+      setSidebarOpen(true);
+      setSaveStatus("idle");
+      setSelectedSong({ id: step.track_id, title: step.name, artist: step.artist });
+    }
   }
 
   async function saveToLikedSongs() {
@@ -164,9 +227,10 @@ export default function ExplorePage() {
         {/* Three.js canvas */}
         <div className="absolute inset-0 z-0">
           <PointCloudViewer
-            globalPoints={[...globalPoints, ...neighborPoints]}
+            globalPoints={[...globalPoints, ...neighborPoints, ...walkPoints]}
             userSongIds={userSongIds}
             neighborIds={neighborIds}
+            walkIds={walkIds}
             coordMode={coordMode}
             onPointClick={onSongSelect}
           />
@@ -232,6 +296,10 @@ export default function ExplorePage() {
             onSave={saveToLikedSongs}
             isSaving={isSaving}
             saveStatus={saveStatus}
+            onWalk={startWalk}
+            isWalking={isWalking}
+            onNextStep={nextStep}
+            walkProgress={isWalking ? { current: walkStepIndex, total: walkSteps.length } : undefined}
           />
         </div>
 

@@ -151,6 +151,8 @@ class RandomWalkStep(BaseModel):
     genre: Optional[str] = None
     transition_score: Optional[float] = None
     restarted: bool = False
+    xyz_raw: Optional[List[float]] = None
+    xyz_uniform: Optional[List[float]] = None
 
 
 class RandomWalkResponse(BaseModel):

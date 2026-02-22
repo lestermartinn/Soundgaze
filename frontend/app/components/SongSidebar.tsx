@@ -24,6 +24,10 @@ interface SongSidebarProps {
   onSave: () => void;
   isSaving: boolean;
   saveStatus: "idle" | "saved" | "error";
+  onWalk?: () => void;
+  isWalking?: boolean;
+  onNextStep?: () => void;
+  walkProgress?: { current: number; total: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +57,10 @@ export default function SongSidebar({
   onSave,
   isSaving,
   saveStatus,
+  onWalk,
+  isWalking = false,
+  onNextStep,
+  walkProgress,
 }: SongSidebarProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -356,30 +364,50 @@ export default function SongSidebar({
             {/* Divider */}
             <div style={{ height: "1px", backgroundColor: "rgba(255,255,255,0.08)" }} />
 
-            {/* Save button */}
-            <button
-              onClick={onSave}
-              disabled={isSaving || saveStatus === "saved" || !song || song.isLoading}
-              className="w-full font-black text-xs uppercase tracking-widest py-3 px-4
-                         border-2 transition-all
-                         hover:-translate-y-px active:translate-y-0
-                         disabled:opacity-40 disabled:cursor-not-allowed disabled:translate-y-0"
-              style={{
-                backgroundColor: saveStatus === "saved" ? "transparent" : "#1DB954",
-                borderColor: "#1DB954",
-                color: saveStatus === "saved" ? "#1DB954" : "#000",
-                boxShadow: saveStatus === "saved" ? "none" : "3px 3px 0px 0px rgba(0,0,0,0.5)",
-              }}
-            >
-              {isSaving
-                ? "Saving..."
-                : saveStatus === "saved"
-                ? "✓ Saved to Liked Songs"
-                : saveStatus === "error"
-                ? "✕ Save Failed — Retry"
-                : "♥ Save to Liked Songs"}
-            </button>
+            {/* Walk button */}
+            {onWalk && (
+              <button
+                onClick={onWalk}
+                disabled={!song || song.isLoading}
+                className="w-full font-black text-xs uppercase tracking-widest py-3 px-4
+                           border-2 transition-all
+                           hover:-translate-y-px active:translate-y-0
+                           disabled:opacity-40 disabled:cursor-not-allowed disabled:translate-y-0"
+                style={{
+                  backgroundColor: isWalking ? "rgba(168,85,247,0.15)" : "transparent",
+                  borderColor: "#A855F7",
+                  color: "#A855F7",
+                  boxShadow: isWalking ? "none" : "3px 3px 0px 0px rgba(0,0,0,0.5)",
+                }}
+              >
+                {isWalking ? "Re-roll Walk" : "Random Walk"}
+              </button>
+            )}
 
+            {/* Next step button */}
+            {isWalking && (
+              <button
+                onClick={onNextStep}
+                disabled={!onNextStep || (walkProgress !== undefined && walkProgress.current >= walkProgress.total)}
+                className="w-full font-black text-xs uppercase tracking-widest py-3 px-4
+                           border-2 transition-all
+                           hover:-translate-y-px active:translate-y-0
+                           disabled:opacity-40 disabled:cursor-not-allowed disabled:translate-y-0"
+                style={{
+                  backgroundColor: "transparent",
+                  borderColor: "#A855F7",
+                  color: "#A855F7",
+                  boxShadow: "3px 3px 0px 0px rgba(0,0,0,0.5)",
+                }}
+              >
+                {walkProgress && walkProgress.current >= walkProgress.total
+                  ? "Walk Complete"
+                  : `→ Next Step${walkProgress ? ` (${walkProgress.current}/${walkProgress.total})` : ""}`}
+              </button>
+            )}
+
+            {/* Divider */}
+            <div style={{ height: "1px", backgroundColor: "rgba(255,255,255,0.08)" }} />
           </div>
         </div>
       </div>

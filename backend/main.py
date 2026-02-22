@@ -610,6 +610,28 @@ async def random_walk_songs(
         current_track_id = next_track_id
         current_vector = list(next_vector)
 
+    # Fetch 3D coords for all path steps in parallel
+    client = get_db()
+
+    async def _fetch_xyz(tid: str) -> tuple[str, list | None, list | None]:
+        try:
+            _, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(tid))
+            p = pay_3d or {}
+            return tid, p.get("xyz_raw"), p.get("xyz_uniform")
+        except Exception:
+            return tid, None, None
+
+    xyz_results = await asyncio.gather(*[_fetch_xyz(s.track_id) for s in path])
+    xyz_map = {tid: (raw, uni) for tid, raw, uni in xyz_results}
+
+    path = [
+        s.model_copy(update={
+            "xyz_raw":     xyz_map.get(s.track_id, (None, None))[0],
+            "xyz_uniform": xyz_map.get(s.track_id, (None, None))[1],
+        })
+        for s in path
+    ]
+
     return RandomWalkResponse(
         seed_track_id=track_id,
         steps_requested=steps,
