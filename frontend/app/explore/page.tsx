@@ -19,10 +19,10 @@ export default function ExplorePage() {
   const router = useRouter();
 
   // Point cloud
-  const [globalPoints, setGlobalPoints] = useState<SongPoint[]>([]);
-  const [userSongIds, setUserSongIds]   = useState<Set<string>>(new Set());
-  const [neighborIds, setNeighborIds]   = useState<Set<string>>(new Set());
-  const [coordMode]                      = useState<"raw" | "uniform">("uniform");
+  const [globalPoints, setGlobalPoints]     = useState<SongPoint[]>([]);
+  const [neighborPoints, setNeighborPoints] = useState<SongPoint[]>([]);
+  const [userSongIds, setUserSongIds]       = useState<Set<string>>(new Set());
+  const [neighborIds, setNeighborIds]       = useState<Set<string>>(new Set());
 
   // Sidebar
   const [selectedSong, setSelectedSong] = useState<SongData | null>(null);
@@ -34,6 +34,8 @@ export default function ExplorePage() {
   const [exploreMode, setExploreMode]   = useState<ExploreMode>("manual");
   const [pointDensity, setPointDensity] = useState(50);
   const [topology, setTopology]         = useState<Topology>("uniform");
+  const coordMode = topology === "uniform" ? "uniform" : "raw";
+  const [isLoadingPoints, setIsLoadingPoints] = useState(false);
   void exploreMode;
 
   // Auth guard
@@ -42,18 +44,30 @@ export default function ExplorePage() {
   }, [status, router]);
 
   // Fetch points — debounced on pointDensity / session
+  // Quadratic scale: slider 1–100 → ~10–5000 points for better high-density reach
   useEffect(() => {
     const userId = (session as { spotifyId?: string } | null)?.spotifyId ?? undefined;
-    const n = Math.max(10, pointDensity * 10); // 10–1000 points
+    const t = pointDensity / 100;
+    const n = Math.min(5000, Math.max(10, Math.round(t * t * 5000)));
+    setIsLoadingPoints(true);
     const timer = setTimeout(async () => {
       try {
         const data = await fetchPoints(n, userId);
-        setGlobalPoints(data.global_sample);
-        setUserSongIds(new Set(data.user_songs.map((p) => p.track_id)));
+        const userIds = new Set(data.user_songs.map((p) => p.track_id));
+        // Merge user songs into the rendered set so they always appear in the cloud
+        const globalIds = new Set(data.global_sample.map((p) => p.track_id));
+        const merged = [
+          ...data.global_sample,
+          ...data.user_songs.filter((p) => !globalIds.has(p.track_id)),
+        ];
+        setGlobalPoints(merged);
+        setUserSongIds(userIds);
       } catch (err) {
         console.error("fetchPoints failed", err);
+      } finally {
+        setIsLoadingPoints(false);
       }
-    }, 300);
+    }, 400);
     return () => clearTimeout(timer);
   }, [pointDensity, session]);
 
@@ -69,10 +83,12 @@ export default function ExplorePage() {
     setSaveStatus("idle");
     setSelectedSong({ id: point.track_id, isLoading: true });
 
-    // Fetch neighbor highlights
+    // Fetch neighbor highlights — add any not already in the cloud as extra points
     try {
       const { songs } = await fetchSimilar(point.track_id);
+      const existingIds = new Set(globalPoints.map((p) => p.track_id));
       setNeighborIds(new Set(songs.map((s) => s.track_id)));
+      setNeighborPoints(songs.filter((s) => !existingIds.has(s.track_id)));
     } catch (err) {
       console.error("fetchSimilar failed", err);
     }
@@ -107,6 +123,7 @@ export default function ExplorePage() {
     setSidebarOpen(false);
     setSelectedSong(null);
     setNeighborIds(new Set());
+    setNeighborPoints([]);
     setSaveStatus("idle");
   }
 
@@ -147,13 +164,28 @@ export default function ExplorePage() {
         {/* Three.js canvas */}
         <div className="absolute inset-0 z-0">
           <PointCloudViewer
-            globalPoints={globalPoints}
+            globalPoints={[...globalPoints, ...neighborPoints]}
             userSongIds={userSongIds}
             neighborIds={neighborIds}
             coordMode={coordMode}
             onPointClick={onSongSelect}
           />
         </div>
+
+        {/* ── Loading spinner ── */}
+        {isLoadingPoints && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+            <div
+              className="rounded-full border-2 border-transparent animate-spin"
+              style={{
+                width: 40,
+                height: 40,
+                borderTopColor: "#1DB954",
+                borderRightColor: "rgba(29,185,84,0.3)",
+              }}
+            />
+          </div>
+        )}
 
         {/* ── Corner green vignettes ── */}
         <div
