@@ -1,5 +1,7 @@
 "use client";
 
+import { useState, useEffect } from "react";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -29,6 +31,7 @@ interface SongSidebarProps {
   onWalkAdventurousChange?: (value: number) => void;
   onNextStep?: () => void;
   walkProgress?: { current: number; total: number };
+  onFetchDescription?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -47,7 +50,13 @@ export default function SongSidebar({
   onWalkAdventurousChange,
   onNextStep,
   walkProgress,
+  onFetchDescription,
 }: SongSidebarProps) {
+  const [descOpen, setDescOpen] = useState(false);
+
+  // Collapse description panel whenever the selected song changes
+  useEffect(() => { setDescOpen(false); }, [song?.id]);
+
   return (
     <>
       <style>{`
@@ -141,29 +150,55 @@ export default function SongSidebar({
             </div>
           )}
 
-          {/* Gemini description — scrollable if long */}
-          {song?.isDescriptionLoading ? (
-            <div
-              className="p-3 flex flex-col gap-2"
-              style={{ backgroundColor: "#111", borderLeft: "2px solid #1DB954" }}
-            >
-              <div className="h-2.5 w-full rounded animate-pulse" style={{ backgroundColor: "#1a1a1a" }} />
-              <div className="h-2.5 w-5/6 rounded animate-pulse" style={{ backgroundColor: "#1a1a1a" }} />
-              <div className="h-2.5 w-4/6 rounded animate-pulse" style={{ backgroundColor: "#1a1a1a" }} />
-            </div>
-          ) : song?.culturalDescription ? (
-            <div
-              className="p-3"
-              style={{ backgroundColor: "#111", borderLeft: "2px solid #1DB954" }}
-            >
-              <p
-                className="desc-scroll font-mono text-xs text-white/55 leading-relaxed overflow-y-auto pr-1"
-                style={{ maxHeight: "100px" }}
+          {/* Gemini description — behind toggle */}
+          {song && !song.isLoading && (
+            <>
+              <button
+                onClick={() => {
+                  const opening = !descOpen;
+                  setDescOpen(opening);
+                  if (opening && !song?.culturalDescription && !song?.isDescriptionLoading) {
+                    onFetchDescription?.();
+                  }
+                }}
+                className="w-full flex items-center justify-between font-black text-[10px] uppercase tracking-widest py-2 px-3 border transition-all"
+                style={{
+                  borderColor: "rgba(29,185,84,0.35)",
+                  color: descOpen ? "#1DB954" : "rgba(255,255,255,0.45)",
+                  backgroundColor: descOpen ? "rgba(29,185,84,0.06)" : "transparent",
+                }}
               >
-                {song.culturalDescription}
-              </p>
-            </div>
-          ) : null}
+                <span>View Description</span>
+                <span style={{ fontSize: "10px" }}>{descOpen ? "▲" : "▼"}</span>
+              </button>
+
+              {descOpen && (
+                <div
+                  className="p-3"
+                  style={{ backgroundColor: "#111", borderLeft: "2px solid #1DB954" }}
+                >
+                  {song.isDescriptionLoading ? (
+                    <div className="flex flex-col gap-2">
+                      <div className="h-2.5 w-full rounded animate-pulse" style={{ backgroundColor: "#1a1a1a" }} />
+                      <div className="h-2.5 w-5/6 rounded animate-pulse" style={{ backgroundColor: "#1a1a1a" }} />
+                      <div className="h-2.5 w-4/6 rounded animate-pulse" style={{ backgroundColor: "#1a1a1a" }} />
+                    </div>
+                  ) : song.culturalDescription ? (
+                    <p
+                      className="desc-scroll font-mono text-xs text-white/55 leading-relaxed overflow-y-auto pr-1"
+                      style={{ maxHeight: "100px" }}
+                    >
+                      {song.culturalDescription}
+                    </p>
+                  ) : (
+                    <p className="font-mono text-xs text-white/30 italic">
+                      No description available.
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
 
           {mode === "manual" && (
             <button

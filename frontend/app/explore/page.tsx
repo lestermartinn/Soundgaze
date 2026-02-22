@@ -139,9 +139,6 @@ export default function ExplorePage() {
     setSidebarOpen(true);
     setSelectedSong({ id: point.track_id, isLoading: true });
 
-    // Kick off neighbors + Gemini in parallel — don't block album art on either
-    const geminiPromise = fetchDescription(point.name, point.artist, point.genre);
-
     fetchSimilar(point.track_id)
       .then(({ songs }) => {
         const existingIds = new Set(globalPoints.map((p) => p.track_id));
@@ -161,7 +158,7 @@ export default function ExplorePage() {
       } catch { /* fall through to point data */ }
     }
 
-    // Show album art, title, artist, preview immediately — description still loading
+    // Show album art, title, artist immediately — description fetched on demand
     setSelectedSong({
       id: point.track_id,
       title: spotifyData?.name ?? point.name,
@@ -169,12 +166,25 @@ export default function ExplorePage() {
       album: spotifyData?.album?.name,
       albumArt: spotifyData?.album?.images?.[0]?.url ?? undefined,
       previewUrl: spotifyData?.preview_url ?? null,
-      isDescriptionLoading: true,
+      isDescriptionLoading: false,
     });
+  }
 
-    // Await Gemini and fill in description when ready
+  // Called only when user clicks "View Description" — avoids burning API quota on browsing
+  async function fetchDescriptionForSelected() {
+    if (!selectedSong) return;
+    if (selectedSong.culturalDescription || selectedSong.isDescriptionLoading) return;
+
+    const point = [...globalPoints, ...neighborPoints, ...walkPoints].find(
+      (p) => p.track_id === selectedSong.id,
+    );
+    const name = selectedSong.title ?? point?.name ?? "";
+    const artist = selectedSong.artist ?? point?.artist ?? "";
+    const genre = point?.genre ?? "";
+
+    setSelectedSong((prev) => prev ? { ...prev, isDescriptionLoading: true } : prev);
     try {
-      const { description } = await geminiPromise;
+      const { description } = await fetchDescription(name, artist, genre);
       setSelectedSong((prev) => prev ? { ...prev, culturalDescription: description, isDescriptionLoading: false } : prev);
     } catch {
       setSelectedSong((prev) => prev ? { ...prev, isDescriptionLoading: false } : prev);
@@ -410,6 +420,7 @@ export default function ExplorePage() {
             onRespawn={respawnToSeed}
             onNextStep={nextStep}
             walkProgress={isWalking ? { current: walkStepIndex, total: walkSteps.length } : undefined}
+            onFetchDescription={fetchDescriptionForSelected}
           />
         </div>
 
