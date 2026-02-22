@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import asyncio
+import random
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -28,7 +29,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D, sample_song_pool, upsert_song, upsert_song_3d, get_song, song_id_to_int
@@ -46,7 +47,9 @@ from models import (
     SpotifySyncResponse,
     SimilarResponse,
     SimilarSong,
-    SimilarRequest
+    SimilarRequest,
+    RandomWalkStep,
+    RandomWalkResponse,
 )
 from spotify import SpotifyImporter
 
@@ -462,3 +465,159 @@ async def get_similar_songs(song_id: str, n: int = 10) -> Any:
             break
 
     return {"songs": results}
+
+
+@app.get("/songs/{track_id}/prev-url")
+async def get_track_prev_url(track_id: str) -> Any:
+    """Return Spotify preview URL for a given track_id."""
+    song = await get_song(track_id)
+    if not song:
+        raise HTTPException(status_code=404, detail=f"Song '{track_id}' not found.")
+
+    spotify_url = f"https://open.spotify.com/track/{track_id}"
+    return {
+        "track_id": track_id,
+        "preview_url": spotify_url,
+    }
+
+
+def _choose_weighted_candidate(candidates: list[dict], sample_temperature: float, rng: random.Random) -> dict:
+    if len(candidates) == 1:
+        return candidates[0]
+
+    safe_temp = max(sample_temperature, 1e-3)
+    logits = [float(c.get("score", 0.0)) / safe_temp for c in candidates]
+    max_logit = max(logits)
+    weights = [math.exp(l - max_logit) for l in logits]
+    total_weight = sum(weights)
+
+    if total_weight <= 0 or not math.isfinite(total_weight):
+        return rng.choice(candidates)
+
+    return rng.choices(candidates, weights=weights, k=1)[0]
+
+
+@app.get("/songs/{track_id}/walk", response_model=RandomWalkResponse)
+async def random_walk_songs(
+    track_id: str,
+    steps: int = Query(10, ge=1, le=100),
+    k: int = Query(20, ge=2, le=200),
+    temperature: float = Query(0.5, ge=0.0, le=1.0),
+    restart_prob: float = Query(0.1, ge=0.0, le=1.0),
+    no_repeat_window: int = Query(3, ge=1, le=50),
+    random_seed: int | None = Query(None),
+) -> RandomWalkResponse:
+    seed_song = await get_song(track_id)
+    if not seed_song:
+        raise HTTPException(status_code=404, detail=f"Song '{track_id}' not found.")
+
+    seed_vector = seed_song.get("vector")
+    if not seed_vector:
+        raise HTTPException(status_code=404, detail=f"No vector found for song '{track_id}'.")
+
+    rng = random.Random(random_seed)
+    scaled_temperature = 0.05 + (temperature * 1.95)
+    effective_k = max(2, min(k, int(round(2 + (k - 2) * temperature))))
+    search_k = min(max(k * 4, k + 10), 500)
+
+    path: list[RandomWalkStep] = [
+        RandomWalkStep(
+            step=0,
+            track_id=track_id,
+            name=seed_song.get("name"),
+            artist=seed_song.get("artist"),
+            genre=seed_song.get("genre"),
+            transition_score=None,
+            restarted=False,
+        )
+    ]
+
+    song_cache: dict[str, dict] = {track_id: seed_song}
+    current_track_id = track_id
+    current_vector = list(seed_vector)
+
+    for step_idx in range(1, steps + 1):
+        restarted = False
+        if current_track_id != track_id and rng.random() < restart_prob:
+            current_track_id = track_id
+            current_vector = list(seed_vector)
+            restarted = True
+
+        similar = await search_similar(query_vector=current_vector, top_k=search_k)
+        recent_window = {item.track_id for item in path[max(0, len(path) - no_repeat_window):]}
+
+        candidates: list[dict] = []
+        seen_ids: set[str] = set()
+
+        for item in similar:
+            candidate_id = str(item.get("track_id", "")).strip()
+            if not candidate_id or candidate_id == current_track_id:
+                continue
+            if candidate_id in seen_ids:
+                continue
+            if candidate_id in recent_window:
+                continue
+
+            seen_ids.add(candidate_id)
+            candidates.append(item)
+            if len(candidates) >= k:
+                break
+
+        if not candidates:
+            immediate_previous = path[-2].track_id if len(path) >= 2 else None
+            for item in similar:
+                candidate_id = str(item.get("track_id", "")).strip()
+                if not candidate_id or candidate_id == current_track_id:
+                    continue
+                if candidate_id in seen_ids:
+                    continue
+                if immediate_previous and candidate_id == immediate_previous:
+                    continue
+                seen_ids.add(candidate_id)
+                candidates.append(item)
+                if len(candidates) >= k:
+                    break
+
+        if not candidates:
+            break
+
+        sampled_pool = candidates[:effective_k]
+        picked = _choose_weighted_candidate(sampled_pool, scaled_temperature, rng)
+        next_track_id = str(picked.get("track_id"))
+
+        if next_track_id not in song_cache:
+            cached_song = await get_song(next_track_id)
+            if cached_song:
+                song_cache[next_track_id] = cached_song
+
+        next_song = song_cache.get(next_track_id, {})
+        path.append(
+            RandomWalkStep(
+                step=step_idx,
+                track_id=next_track_id,
+                name=next_song.get("name") or picked.get("name"),
+                artist=next_song.get("artist") or picked.get("artist"),
+                genre=next_song.get("genre") or picked.get("genre"),
+                transition_score=float(picked.get("score", 0.0)),
+                restarted=restarted,
+            )
+        )
+
+        next_vector = next_song.get("vector") if next_song else None
+        if not next_vector:
+            break
+
+        current_track_id = next_track_id
+        current_vector = list(next_vector)
+
+    return RandomWalkResponse(
+        seed_track_id=track_id,
+        steps_requested=steps,
+        steps_returned=max(0, len(path) - 1),
+        k=k,
+        effective_k=effective_k,
+        temperature=temperature,
+        restart_prob=restart_prob,
+        no_repeat_window=no_repeat_window,
+        path=path,
+    )

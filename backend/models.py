@@ -141,3 +141,25 @@ class SimilarRequest(BaseModel):
 
 class SimilarResponse(BaseModel):
     results: list[SimilarSong]
+
+
+class RandomWalkStep(BaseModel):
+    step: int
+    track_id: str
+    name: Optional[str] = None
+    artist: Optional[str] = None
+    genre: Optional[str] = None
+    transition_score: Optional[float] = None
+    restarted: bool = False
+
+
+class RandomWalkResponse(BaseModel):
+    seed_track_id: str
+    steps_requested: int
+    steps_returned: int
+    k: int
+    effective_k: int
+    temperature: float
+    restart_prob: float
+    no_repeat_window: int
+    path: List[RandomWalkStep]
