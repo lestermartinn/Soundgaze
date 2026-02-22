@@ -8,6 +8,7 @@ Add your routes below. Use /songs/recommend as a reference for the full pattern:
 """
 
 import logging
+<<<<<<< Updated upstream
 import math
 import os
 import random
@@ -18,6 +19,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import google.genai as genai
+=======
+import asyncio
+from contextlib import asynccontextmanager
+import numpy as np
+from mapping import get_reducer, get_quantiler  # or wherever these live
+>>>>>>> Stashed changes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +36,11 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+<<<<<<< Updated upstream
 from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D, sample_song_pool, upsert_song, get_song, song_id_to_int
+=======
+from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D, sample_song_pool, upsert_song, get_song, song_id_to_int, upsert_song_3d
+>>>>>>> Stashed changes
 from ingest import ingest_if_needed
 from models import (
     RecommendRequest,
@@ -327,21 +338,6 @@ async def get_all_songs_3d():
 
 @app.post("/songs/spotify/sync", response_model=SpotifySyncResponse)
 async def sync_spotify_library(body: SpotifyImportRequest):
-    """
-    Sync user's top Spotify tracks to local database.
-
-    Fetches up to 50 of the user's most-listened tracks from Spotify,
-    converts their audio features to vectors, and adds them to the database.
-    If a song already exists, the user_id is merged into the user_ids list.
-
-    Args:
-        body.user_id: App user ID to associate with these songs
-        body.access_token: Spotify OAuth access token
-        body.limit: Number of top songs to fetch (default 50)
-
-    Returns:
-        Summary of songs added, merged, and any failures
-    """
     try:
         importer = SpotifyImporter(body.access_token)
         tracks = await importer.get_tracks_with_vectors(limit=body.limit)
@@ -352,38 +348,72 @@ async def sync_spotify_library(body: SpotifyImportRequest):
         added_tracks = []
         merged_tracks = []
 
+        client = get_db()
+
         for track in tracks:
             try:
                 track_id = track["track_id"]
-                vector = track["vector"]
-                name = track["name"]
-                artist = track["artist"]
+                vector   = track["vector"]
+                name     = track["name"]
+                artist   = track["artist"]
 
-                # Check if song already exists
-                existing = await get_song(track_id)
-                
-                # Upsert with user_id (handles merge internally)
+                # ── 8D collection ──────────────────────────────────────────
+                existing_8d = await get_song(track_id)
                 await upsert_song(
                     track_id=track_id,
                     vector=vector,
                     name=name,
                     artist=artist,
-                    genre=None,  # Spotify doesn't provide genre at track level
+                    genre=None,
                     user_id=body.user_id,
                 )
-
-                if existing is None:
+                if existing_8d is None:
                     songs_added += 1
                     added_tracks.append(track_id)
-                else:
-                    # Check if user was already in the list
-                    existing_user_ids = existing.get("user_ids", [])
-                    if body.user_id not in existing_user_ids:
-                        songs_merged += 1
-                        merged_tracks.append(track_id)
+                elif body.user_id not in existing_8d.get("user_ids", []):
+                    songs_merged += 1
+                    merged_tracks.append(track_id)
+
+                # ── 3D collection ──────────────────────────────────────────
+                xyz_raw     = None
+                xyz_uniform = None
+                existing_3d_user_ids: list[str] = []
+                try:
+                    vec_3d, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
+                    p = pay_3d or {}
+                    existing_3d_user_ids = p.get("user_ids", [])
+                    xyz_raw     = p.get("xyz_raw")
+                    xyz_uniform = p.get("xyz_uniform")
+                    if not vec_3d:
+                        xyz_raw = xyz_uniform = None
+                except Exception:
+                    pass
+
+                if not xyz_raw or not xyz_uniform:
+                    arr         = np.array([vector], dtype=np.float32)
+                    raw_arr     = get_reducer().transform(arr)
+                    uni_arr     = get_quantiler().transform(raw_arr)
+                    xyz_raw     = [float(v) for v in raw_arr[0]]
+                    xyz_uniform = [float(v) for v in uni_arr[0]]
+
+                track["xyz_raw"] = xyz_raw  # store back for response
+
+                merged_3d_user_ids = list(set(existing_3d_user_ids + [body.user_id]))
+
+                await upsert_song_3d(
+                    track_id=track_id,
+                    vector_3d=xyz_raw,
+                    payload={
+                        "track_id":    track_id,
+                        "name":        name,
+                        "artist":      artist,
+                        "xyz_raw":     xyz_raw,
+                        "xyz_uniform": xyz_uniform,
+                        "user_ids":    merged_3d_user_ids,
+                    },
+                )
 
             except Exception as e:
-                logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to process track {track.get('track_id', 'unknown')}: {e}")
                 failed_count += 1
 
@@ -400,10 +430,7 @@ async def sync_spotify_library(body: SpotifyImportRequest):
         )
 
     except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to sync Spotify library: {str(e)}"
-        )
+        raise HTTPException(status_code=400, detail=f"Failed to sync Spotify library: {str(e)}")
 '''
 @app.post("/songs/similar", response_model=SimilarResponse)
 async def similar(body: SimilarRequest):
@@ -427,28 +454,30 @@ async def get_similar_songs(song_id: str, n: int = 10) -> Any:
     if not vector_8d:
         raise HTTPException(status_code=404, detail=f"No vector found for song '{song_id}'.")
 
-    similar = await search_similar(query_vector=vector_8d, top_k=n * 3)  # fetch extra to account for deduplication
+    similar = await search_similar(query_vector=vector_8d, top_k=n * 3)
 
     client = get_db()
     results = []
-    seen_ids = {song_id}  # pre-seed with the query song so it's never included
+    seen_ids = {song_id}
 
     for s in similar:
         track_id = s.get("track_id")
         if not track_id or track_id in seen_ids:
             continue
-
         seen_ids.add(track_id)
-        result = {**s}
+
+        result = {**s}  # keeps track_id, name, artist, genre, score from 8D search
 
         try:
-            vector_3d, payload_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
+            vector_3d, payload = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
             if vector_3d:
-                result["vector_3d"] = list(vector_3d)
-                result["xyz_raw"] = (payload_3d or {}).get("xyz_raw")
-                result["xyz_uniform"] = (payload_3d or {}).get("xyz_uniform")
+                result["vector"]      = (payload or {}).get("xyz_raw")
+                result["xyz_raw"]     = (payload or {}).get("xyz_raw")
+                result["xyz_uniform"] = (payload or {}).get("xyz_uniform")
+            else:
+                logger.warning(f"'{track_id}' found in songs_3d but vector is empty")
         except Exception as e:
-            logging.getLogger(__name__).debug(f"No 3D record for '{track_id}': {e}")
+            logger.warning(f"Failed to get 3D record for '{track_id}': {e}")
 
         results.append(result)
         if len(results) >= n:
@@ -456,6 +485,7 @@ async def get_similar_songs(song_id: str, n: int = 10) -> Any:
 
     return {"songs": results}
 
+<<<<<<< Updated upstream
 
 @app.get("/songs/{track_id}/prev-url")
 async def get_track_prev_url(track_id: str) -> Any:
@@ -611,3 +641,105 @@ async def random_walk_songs(
         no_repeat_window=no_repeat_window,
         path=path,
     )
+=======
+@app.post("/songs/spotify/top-frequent")
+async def get_spotify_top_frequent(body: SpotifyImportRequest):
+    try:
+        importer = SpotifyImporter(body.access_token)
+        tracks = await importer.get_top_tracks_with_vectors(limit=body.limit)
+
+        songs_added = 0
+        songs_merged = 0
+        failed_count = 0
+        client = get_db()
+
+        for track in tracks:
+            try:
+                track_id = track["track_id"]
+                vector   = track["vector"]
+                name     = track["name"]
+                artist   = track["artist"]
+
+                # ── 8D collection ──────────────────────────────────────────
+                existing_8d = await get_song(track_id)
+                await upsert_song(
+                    track_id=track_id,
+                    vector=vector,
+                    name=name,
+                    artist=artist,
+                    genre=None,
+                    user_id=body.user_id,
+                )
+                if existing_8d is None:
+                    songs_added += 1
+                elif body.user_id not in existing_8d.get("user_ids", []):
+                    songs_merged += 1
+
+                # ── 3D collection ──────────────────────────────────────────
+                xyz_raw     = None
+                xyz_uniform = None
+                existing_3d_user_ids: list[str] = []
+                try:
+                    vec_3d, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
+                    p = pay_3d or {}
+                    existing_3d_user_ids = p.get("user_ids", [])
+                    xyz_raw     = p.get("xyz_raw")
+                    xyz_uniform = p.get("xyz_uniform")
+                    if not vec_3d:
+                        xyz_raw = xyz_uniform = None
+                except Exception:
+                    pass
+
+                if not xyz_raw or not xyz_uniform:
+                    arr         = np.array([vector], dtype=np.float32)
+                    raw_arr     = get_reducer().transform(arr)
+                    uni_arr     = get_quantiler().transform(raw_arr)
+                    xyz_raw     = [float(v) for v in raw_arr[0]]
+                    xyz_uniform = [float(v) for v in uni_arr[0]]
+
+                track["xyz_raw"] = xyz_raw  # store back for response
+                track["xyz_uniform"] = xyz_uniform
+
+                merged_3d_user_ids = list(set(existing_3d_user_ids + [body.user_id]))
+
+                await upsert_song_3d(
+                    track_id=track_id,
+                    vector_3d=xyz_raw,
+                    payload={
+                        "track_id":    track_id,
+                        "name":        name,
+                        "artist":      artist,
+                        "xyz_raw":     xyz_raw,
+                        "xyz_uniform": xyz_uniform,
+                        "user_ids":    merged_3d_user_ids,
+                    },
+                )
+
+            except Exception as e:
+                logger.warning(f"Failed to process track {track.get('track_id', 'unknown')}: {e}")
+                failed_count += 1
+
+        response_tracks = [
+            {
+                "track_id": t["track_id"],
+                "name":     t["name"],
+                "artist":   t["artist"],
+                "rank":     t["rank"],
+                "vector":   t.get("xyz_raw"),
+                "xyz_raw":     t.get("xyz_raw"),      # add this
+                "xyz_uniform": t.get("xyz_uniform"),  # add this
+            }
+            for t in tracks
+        ]
+
+        return {
+            "songs": response_tracks,
+            "songs_added": songs_added,
+            "songs_merged": songs_merged,
+            "total_processed": len(tracks),
+            "failed_count": failed_count,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch top tracks: {str(e)}")
+>>>>>>> Stashed changes
