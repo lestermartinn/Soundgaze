@@ -53,6 +53,8 @@ class SongSampleItem(BaseModel):
     genre: Optional[str] = None
     user_id: Optional[str] = None
     user_ids: List[str] = Field(default_factory=list)
+    xyz_raw: Optional[List[float]] = None
+    xyz_uniform: Optional[List[float]] = None
 
 
 class SongPoolRequest(BaseModel):

@@ -10,9 +10,12 @@ Add your routes below. Use /songs/recommend as a reference for the full pattern:
 import logging
 import math
 import os
+import asyncio
 import random
 from contextlib import asynccontextmanager
 from typing import Any
+
+import numpy as np
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -29,7 +32,8 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D, sample_song_pool, upsert_song, get_song, song_id_to_int
+from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D, sample_song_pool, upsert_song, upsert_song_3d, get_song, song_id_to_int
+from mapping import get_reducer, get_quantiler, normalize_raw_coords
 from ingest import ingest_if_needed
 from models import (
     RecommendRequest,
@@ -67,7 +71,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -126,22 +130,48 @@ async def recommend(body: RecommendRequest):
 
 @app.post("/songs/pool", response_model=SongPoolResponse)
 async def song_pool(body: SongPoolRequest):
-    """Return up to 1000 points with new-user fallback.
+    """Return up to 1000 points with new-user fallback, enriched with 3D coords.
 
     - If user_id has songs in DB, include personal songs + random global songs.
     - If user_id is new or omitted (no Spotify link), return random songs so UI still renders.
+    - Each song is enriched with xyz_raw/xyz_uniform from COLLECTION_3D; songs
+      without a 3D record are dropped.
     """
     sampled = await sample_song_pool(
         user_id=body.user_id,
         user_song_count=body.user_song_count,
         total_count=body.total_count,
     )
+
+    client = get_db()
+
+    async def enrich(song: dict) -> dict | None:
+        try:
+            _, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(song["track_id"]))
+            p = pay_3d or {}
+            xyz_raw     = p.get("xyz_raw")
+            xyz_uniform = p.get("xyz_uniform")
+            if not xyz_raw or not xyz_uniform:
+                return None
+            if not all(math.isfinite(v) for v in xyz_raw + xyz_uniform):
+                return None
+            return {**song, "xyz_raw": xyz_raw, "xyz_uniform": xyz_uniform}
+        except Exception:
+            return None
+
+    all_songs    = sampled["user_songs"] + sampled["global_songs"]
+    n_user       = len(sampled["user_songs"])
+    enriched_all = await asyncio.gather(*[enrich(s) for s in all_songs])
+
+    enriched_user   = [s for s in enriched_all[:n_user]  if s is not None]
+    enriched_global = [s for s in enriched_all[n_user:]  if s is not None]
+
     return SongPoolResponse(
-        user_songs=sampled["user_songs"],
-        global_songs=sampled["global_songs"],
-        user_songs_returned=len(sampled["user_songs"]),
-        global_songs_returned=len(sampled["global_songs"]),
-        total_returned=len(sampled["user_songs"]) + len(sampled["global_songs"]),
+        user_songs=enriched_user,
+        global_songs=enriched_global,
+        user_songs_returned=len(enriched_user),
+        global_songs_returned=len(enriched_global),
+        total_returned=len(enriched_user) + len(enriched_global),
         is_new_user=bool(sampled["is_new_user"]),
     )
 
@@ -264,67 +294,6 @@ async def get_all_songs_3d():
     ]
 
 
-# ---------------------------------------------------------------------------
-# Debug
-# ---------------------------------------------------------------------------
-
-@app.get("/debug/songs_3d")
-async def debug_songs_3d(n: int = 5):
-    """Return n sample points from songs_3d (searches with a zero vector)."""
-    client = get_db()
-    results = await client.search(COLLECTION_3D, query=[0.0, 0.0, 0.0], top_k=n, with_payload=True, with_vectors=True)
-    return [
-        {
-            "track_id": r.payload.get("track_id"),
-            "name":     r.payload.get("name"),
-            "artist":   r.payload.get("artist"),
-            "genre":    r.payload.get("genre"),
-            "user_ids": r.payload.get("user_ids"),
-            "xyz":      list(r.vector) if r.vector else None,
-            "score":    round(r.score, 4),
-        }
-        for r in results
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Point cloud
-# ---------------------------------------------------------------------------
-
-@app.get("/songs/3d/all")
-async def get_all_songs_3d():
-    """
-    Return every point in the songs_3d collection with both coordinate sets.
-
-    Each item includes:
-      xyz_raw     -- raw UMAP coords (accurate topology)
-      xyz_uniform -- quantile-normalized coords (uniform distribution)
-      track_id, name, artist, genre
-    """
-    client = get_db()
-    total = await client.count(COLLECTION_3D)
-    if total == 0:
-        return []
-
-    results = await client.search(
-        COLLECTION_3D,
-        query=[0.0, 0.0, 0.0],
-        top_k=total,
-        with_payload=True,
-    )
-    return [
-        {
-            "track_id":   r.payload.get("track_id"),
-            "name":       r.payload.get("name"),
-            "artist":     r.payload.get("artist"),
-            "genre":      r.payload.get("genre"),
-            "xyz_raw":     r.payload.get("xyz_raw"),
-            "xyz_uniform": r.payload.get("xyz_uniform"),
-        }
-        for r in results
-    ]
-
-
 @app.post("/songs/spotify/sync", response_model=SpotifySyncResponse)
 async def sync_spotify_library(body: SpotifyImportRequest):
     """
@@ -352,38 +321,72 @@ async def sync_spotify_library(body: SpotifyImportRequest):
         added_tracks = []
         merged_tracks = []
 
+        client = get_db()
+
         for track in tracks:
             try:
                 track_id = track["track_id"]
-                vector = track["vector"]
-                name = track["name"]
-                artist = track["artist"]
+                vector   = track["vector"]
+                name     = track["name"]
+                artist   = track["artist"]
 
-                # Check if song already exists
-                existing = await get_song(track_id)
-                
-                # Upsert with user_id (handles merge internally)
+                # ── 8D collection ──────────────────────────────────────────
+                existing_8d = await get_song(track_id)
                 await upsert_song(
                     track_id=track_id,
                     vector=vector,
                     name=name,
                     artist=artist,
-                    genre=None,  # Spotify doesn't provide genre at track level
+                    genre=None,
                     user_id=body.user_id,
                 )
-
-                if existing is None:
+                if existing_8d is None:
                     songs_added += 1
                     added_tracks.append(track_id)
-                else:
-                    # Check if user was already in the list
-                    existing_user_ids = existing.get("user_ids", [])
-                    if body.user_id not in existing_user_ids:
-                        songs_merged += 1
-                        merged_tracks.append(track_id)
+                elif body.user_id not in existing_8d.get("user_ids", []):
+                    songs_merged += 1
+                    merged_tracks.append(track_id)
+
+                # ── 3D collection ──────────────────────────────────────────
+                # Try to load existing 3D record to preserve coords + merge user_ids
+                xyz_raw     = None
+                xyz_uniform = None
+                existing_3d_user_ids: list[str] = []
+                try:
+                    vec_3d, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
+                    p = pay_3d or {}
+                    existing_3d_user_ids = p.get("user_ids", [])
+                    xyz_raw     = p.get("xyz_raw")
+                    xyz_uniform = p.get("xyz_uniform")
+                    if not vec_3d:
+                        xyz_raw = xyz_uniform = None
+                except Exception:
+                    pass  # song not in 3D collection yet
+
+                # Compute 3D coords only if missing
+                if not xyz_raw or not xyz_uniform:
+                    arr         = np.array([vector], dtype=np.float32)
+                    raw_arr     = get_reducer().transform(arr)
+                    uni_arr     = get_quantiler().transform(raw_arr)
+                    xyz_raw     = [float(v) for v in normalize_raw_coords(raw_arr)[0]]
+                    xyz_uniform = [float(v) for v in uni_arr[0]]
+
+                merged_3d_user_ids = list(set(existing_3d_user_ids + [body.user_id]))
+
+                await upsert_song_3d(
+                    track_id=track_id,
+                    vector_3d=xyz_raw,
+                    payload={
+                        "track_id":   track_id,
+                        "name":       name,
+                        "artist":     artist,
+                        "xyz_raw":    xyz_raw,
+                        "xyz_uniform": xyz_uniform,
+                        "user_ids":   merged_3d_user_ids,
+                    },
+                )
 
             except Exception as e:
-                logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to process track {track.get('track_id', 'unknown')}: {e}")
                 failed_count += 1
 
@@ -439,18 +442,25 @@ async def get_similar_songs(song_id: str, n: int = 10) -> Any:
             continue
 
         seen_ids.add(track_id)
-        result = {**s}
 
         try:
             vector_3d, payload_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
-            if vector_3d:
-                result["vector_3d"] = list(vector_3d)
-                result["xyz_raw"] = (payload_3d or {}).get("xyz_raw")
-                result["xyz_uniform"] = (payload_3d or {}).get("xyz_uniform")
+            if not vector_3d:
+                continue
+            p = payload_3d or {}
+            xyz_raw     = p.get("xyz_raw")
+            xyz_uniform = p.get("xyz_uniform")
+            if not xyz_raw or not xyz_uniform:
+                continue
         except Exception as e:
             logging.getLogger(__name__).debug(f"No 3D record for '{track_id}': {e}")
+            continue
 
-        results.append(result)
+        results.append({
+            **s,
+            "xyz_raw":     xyz_raw,
+            "xyz_uniform": xyz_uniform,
+        })
         if len(results) >= n:
             break
 
