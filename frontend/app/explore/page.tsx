@@ -6,7 +6,8 @@ import { useRouter } from "next/navigation";
 import Navbar from "../components/Navbar";
 import PointCloudViewer from "../components/PointCloudViewer";
 import ControlsOverlay, { ExploreMode } from "../components/ControlsOverlay";
-import DensitySlider from "../components/DensitySlider";
+import DensitySlider, { Topology } from "../components/DensitySlider";
+import SongSidebar, { SongData } from "../components/SongSidebar";
 import { fetchPoints, fetchSimilar, type SongPoint } from "../lib/api";
 
 // ---------------------------------------------------------------------------
@@ -18,20 +19,21 @@ export default function ExplorePage() {
   const router = useRouter();
 
   // Point cloud
-  const [globalPoints, setGlobalPoints]   = useState<SongPoint[]>([]);
-  const [userSongIds, setUserSongIds]     = useState<Set<string>>(new Set());
-  const [neighborIds, setNeighborIds]     = useState<Set<string>>(new Set());
-  const [coordMode]                        = useState<"raw" | "uniform">("uniform");
+  const [globalPoints, setGlobalPoints] = useState<SongPoint[]>([]);
+  const [userSongIds, setUserSongIds]   = useState<Set<string>>(new Set());
+  const [neighborIds, setNeighborIds]   = useState<Set<string>>(new Set());
+  const [coordMode]                      = useState<"raw" | "uniform">("uniform");
 
   // Sidebar
-  const [selectedSong, setSelectedSong]   = useState<SongPoint | null>(null);
-  const [sidebarOpen, setSidebarOpen]     = useState(false);
-  const [isSaving, setIsSaving]           = useState(false);
-  const [saveStatus, setSaveStatus]       = useState<"idle" | "saved" | "error">("idle");
+  const [selectedSong, setSelectedSong] = useState<SongData | null>(null);
+  const [sidebarOpen, setSidebarOpen]   = useState(false);
+  const [isSaving, setIsSaving]         = useState(false);
+  const [saveStatus, setSaveStatus]     = useState<"idle" | "saved" | "error">("idle");
 
   // Controls
-  const [exploreMode, setExploreMode]     = useState<ExploreMode>("manual");
-  const [pointDensity, setPointDensity]   = useState(50);
+  const [exploreMode, setExploreMode]   = useState<ExploreMode>("manual");
+  const [pointDensity, setPointDensity] = useState(50);
+  const [topology, setTopology]         = useState<Topology>("uniform");
   void exploreMode;
 
   // Auth guard
@@ -64,13 +66,40 @@ export default function ExplorePage() {
 
   async function onSongSelect(point: SongPoint) {
     setSidebarOpen(true);
-    setSelectedSong(point);
     setSaveStatus("idle");
+    setSelectedSong({ id: point.track_id, isLoading: true });
+
+    // Fetch neighbor highlights
     try {
       const { songs } = await fetchSimilar(point.track_id);
       setNeighborIds(new Set(songs.map((s) => s.track_id)));
     } catch (err) {
       console.error("fetchSimilar failed", err);
+    }
+
+    // Fetch rich Spotify metadata
+    if (!session?.accessToken) return;
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/tracks/${point.track_id}`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` },
+      });
+      if (!res.ok) {
+        setSelectedSong({ id: point.track_id });
+        return;
+      }
+      const data = await res.json();
+      setSelectedSong({
+        id: point.track_id,
+        title: data.name,
+        artist: data.artists.map((a: { name: string }) => a.name).join(", "),
+        album: data.album?.name,
+        albumArt: data.album?.images?.[0]?.url ?? undefined,
+        previewUrl: data.preview_url ?? null,
+        culturalDescription:
+          "Cultural and genre context will appear here once the backend is connected.",
+      });
+    } catch {
+      setSelectedSong({ id: point.track_id });
     }
   }
 
@@ -92,7 +121,7 @@ export default function ExplorePage() {
           Authorization: `Bearer ${session.accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ids: [selectedSong.track_id] }),
+        body: JSON.stringify({ ids: [selectedSong.id] }),
       });
       setSaveStatus(res.ok ? "saved" : "error");
     } catch {
@@ -142,7 +171,12 @@ export default function ExplorePage() {
 
         {/* ── Density slider — left edge, vertically centered ── */}
         <div className="absolute left-4 top-1/2 -translate-y-1/2 z-10">
-          <DensitySlider value={pointDensity} onChange={setPointDensity} />
+          <DensitySlider
+            value={pointDensity}
+            onChange={setPointDensity}
+            topology={topology}
+            onTopologyChange={setTopology}
+          />
         </div>
 
         {/* ── Mode controls — bottom center ── */}
@@ -150,76 +184,24 @@ export default function ExplorePage() {
           <ControlsOverlay onModeChange={setExploreMode} />
         </div>
 
-        {/* ── Sidebar — slides in from right on song select ── */}
-        <aside
-          className={`absolute top-0 right-0 h-full w-80 z-10
-                      bg-off-white border-l-4 border-black
-                      shadow-[-8px_0px_0px_0px_rgba(0,0,0,1)]
-                      transition-transform duration-300 ease-in-out flex flex-col
-                      ${sidebarOpen ? "translate-x-0" : "translate-x-full"}`}
+        {/* ── Song sidebar — floats right-4, mirrors DensitySlider position ── */}
+        <div
+          className="absolute right-4 top-1/2 z-10 transition-all duration-300 ease-in-out"
+          style={{
+            transform: `translateY(-50%) translateX(${sidebarOpen ? "0px" : "calc(100% + 2rem)"})`,
+            opacity: sidebarOpen ? 1 : 0,
+            pointerEvents: sidebarOpen ? "auto" : "none",
+          }}
         >
-          {/* Sidebar header */}
-          <div className="flex items-center justify-between px-4 py-3 bg-black border-b-4 border-black">
-            <span className="font-black text-xs uppercase tracking-widest text-spotify-green">
-              Now Exploring
-            </span>
-            <button
-              onClick={closeSidebar}
-              className="font-black text-white text-lg leading-none hover:text-spotify-green transition-colors"
-              aria-label="Close sidebar"
-            >
-              ✕
-            </button>
-          </div>
-
-          {/* Sidebar content */}
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-            {selectedSong ? (
-              <>
-                {/* Song info */}
-                <div className="border-b-4 border-black pb-3">
-                  <h2 className="font-black text-2xl uppercase leading-tight">
-                    {selectedSong.name}
-                  </h2>
-                  <p className="font-mono font-bold text-sm text-black/60 mt-1">
-                    {selectedSong.artist}
-                  </p>
-                  <p className="font-mono text-xs text-black/40 mt-1 uppercase tracking-widest">
-                    {selectedSong.genre}
-                  </p>
-                </div>
-
-                {/* Similar songs count */}
-                {neighborIds.size > 0 && (
-                  <div className="bg-black text-white p-3 border-4 border-black">
-                    <p className="font-mono text-xs leading-relaxed">
-                      <span className="text-[#FF6B35] font-black">{neighborIds.size}</span> similar songs highlighted in the cloud.
-                    </p>
-                  </div>
-                )}
-
-                {/* Save to Liked Songs */}
-                <button
-                  className="w-full neo-btn-primary text-sm mt-auto disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={saveToLikedSongs}
-                  disabled={isSaving || saveStatus === "saved" || !session?.accessToken}
-                >
-                  {isSaving
-                    ? "Saving..."
-                    : saveStatus === "saved"
-                    ? "✓ Saved to Liked Songs"
-                    : saveStatus === "error"
-                    ? "✕ Save Failed — Retry"
-                    : "♥ Save to Liked Songs"}
-                </button>
-              </>
-            ) : (
-              <p className="font-mono text-sm text-black/40 text-center mt-8">
-                Click a point in the universe to explore a song.
-              </p>
-            )}
-          </div>
-        </aside>
+          <SongSidebar
+            song={selectedSong}
+            isOpen={sidebarOpen}
+            onClose={closeSidebar}
+            onSave={saveToLikedSongs}
+            isSaving={isSaving}
+            saveStatus={saveStatus}
+          />
+        </div>
 
       </div>
     </main>

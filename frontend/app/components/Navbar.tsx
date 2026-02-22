@@ -12,6 +12,7 @@ export default function Navbar() {
   const accessToken = session?.accessToken;
   const [copiedId, setCopiedId] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
+  const userImage = session?.user?.image;
 
   function copySpotifyId() {
     if (!spotifyId) return;
@@ -30,14 +31,29 @@ export default function Navbar() {
   }
 
   return (
-    <nav className="relative z-20 flex items-center justify-between px-6 h-14 bg-spotify-black border-b-4 border-black shrink-0">
+    <nav className="relative z-20 flex items-center justify-between px-6 h-14 bg-spotify-black shrink-0">
 
-      {/* ── Left: Wordmark ── */}
+      {/* ── Left: Wordmark + Live Data ── */}
       <div className="flex items-center gap-3">
         <span className="w-3 h-8 bg-spotify-green" />
         <span className="font-black text-xl uppercase tracking-widest text-white">
           Soundgaze
         </span>
+        <div className="hidden md:flex items-center gap-2 ml-2">
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span
+              className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+              style={{ backgroundColor: "#1DB954" }}
+            />
+            <span
+              className="relative inline-flex rounded-full h-2 w-2"
+              style={{ backgroundColor: "#1DB954" }}
+            />
+          </span>
+          <span className="font-black text-[10px] uppercase tracking-widest" style={{ color: "#1DB954" }}>
+            Live Data
+          </span>
+        </div>
       </div>
 
       {/* ── Right: Auth status ── */}
@@ -46,11 +62,28 @@ export default function Navbar() {
           <span className="font-mono text-xs text-white/40 uppercase tracking-widest animate-pulse">
             Connecting...
           </span>
-        ) : isAuthenticated && userName ? (
+        ) : isAuthenticated ? (
           <>
-            <span className="hidden sm:block font-mono font-bold text-xs tracking-widest text-white/60 uppercase">
-              {userName}
-            </span>
+            {/* Profile avatar */}
+            {userImage ? (
+              <img
+                src={userImage}
+                alt={userName ?? "Profile"}
+                title={userName ?? undefined}
+                className="w-8 h-8 rounded-full border-2 object-cover"
+                style={{ borderColor: "#1DB954" }}
+              />
+            ) : (
+              <div
+                className="w-8 h-8 rounded-full border-2 flex items-center justify-center"
+                style={{ borderColor: "#1DB954", backgroundColor: "#1DB954" }}
+                title={userName ?? undefined}
+              >
+                <span className="font-black text-[10px] text-black uppercase">
+                  {userName?.[0] ?? "?"}
+                </span>
+              </div>
+            )}
             {spotifyId && (
               <button
                 onClick={copySpotifyId}
@@ -76,8 +109,12 @@ export default function Navbar() {
             <button
               onClick={() => signOut({ callbackUrl: "http://127.0.0.1:3000" })}
               className="font-black text-xs uppercase tracking-widest px-4 py-2
-                         border-2 border-white/30 text-white/60
-                         hover:border-white hover:text-white transition-colors"
+                         border-2 transition-all hover:-translate-y-px active:translate-y-0"
+              style={{
+                borderColor: "#1DB954",
+                color: "#1DB954",
+                boxShadow: "2px 2px 0px 0px #1DB954",
+              }}
             >
               Disconnect
             </button>
