@@ -14,6 +14,8 @@ import asyncio
 import logging
 from typing import Optional, List, Dict
 
+import httpx
+
 try:
     import spotipy
     from spotipy import SpotifyClientCredentials
@@ -23,6 +25,30 @@ except ImportError:
     )
 
 logger = logging.getLogger(__name__)
+
+
+async def fetch_reccobeats_audio_features(track_ids: list[str]) -> list[dict | None]:
+    """Fetch audio features from ReccoBeats in small batches of 5."""
+    results = []
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for i in range(0, len(track_ids), 5):
+            chunk = track_ids[i:i + 5]
+            ids_param = ",".join(chunk)
+            url = f"https://api.reccobeats.com/v1/audio-features?ids={ids_param}"
+            
+            try:
+                r = await client.get(url)
+                print(f"ReccoBeats status: {r.status_code}, response: {r.text[:200]}")
+                r.raise_for_status()
+                data = r.json()
+                chunk_results = data.get("content", [None] * len(chunk))
+                results.extend(chunk_results)
+            except Exception as e:
+                logger.warning(f"ReccoBeats chunk failed: {e}")
+                results.extend([None] * len(chunk))
+    
+    return results
 
 
 class SpotifyImporter:
@@ -40,50 +66,26 @@ class SpotifyImporter:
         self.logger = logger
 
     def fetch_user_top_tracks(self, limit: int = 50) -> List[Dict]:
-        """
-        Fetch user's top 50 tracks from Spotify.
-        
-        NOTE: This is synchronous (spotipy doesn't support async).
-        Call via asyncio.to_thread() in async context.
+        """Fetch user's recently played tracks from Spotify."""
+        results = self.sp.current_user_recently_played(limit=limit)
+        items = results.get("items", [])
 
-        Args:
-            limit: Number of tracks to fetch (max 50 per request)
+        # recently_played returns items with a nested "track" object
+        tracks = []
+        seen_ids = set()
+        for item in items:
+            track = item.get("track", {})
+            track_id = track.get("id")
+            if not track_id or track_id in seen_ids:
+                continue
+            seen_ids.add(track_id)
+            tracks.append({
+                "track_id": track_id,
+                "name": track.get("name"),
+                "artist": ", ".join([a["name"] for a in track.get("artists", [])]),
+            })
 
-        Returns:
-            List of track dictionaries containing: track_id, name, artist, audio features
-        """
-        try:
-            # Fetch top tracks (short_term = last 4 weeks, medium_term = 6 months, all_time = all_time)
-            results = self.sp.current_user_top_tracks(limit=limit, time_range="medium_term")
-            
-            tracks = []
-            for item in results.get("items", []):
-                track_id = item["id"]
-                name = item["name"]
-                artists = ", ".join([a["name"] for a in item.get("artists", [])])
-                
-                # Fetch audio features for this track
-                audio_features = self.sp.audio_features(track_id)[0]
-                if audio_features is None:
-                    self.logger.warning(f"Skipped {track_id} (no audio features)")
-                    continue
-                
-                tracks.append({
-                    "track_id": track_id,
-                    "name": name,
-                    "artist": artists,
-                    "audio_features": audio_features,
-                })
-            
-            self.logger.info(f"Fetched {len(tracks)} top tracks from Spotify")
-            return tracks
-            
-        except spotipy.exceptions.SpotifyException as e:
-            self.logger.error(f"Spotify API error: {e}")
-            raise RuntimeError(f"Failed to fetch Spotify top tracks: {e}")
-        except Exception as e:
-            self.logger.error(f"Unexpected error fetching Spotify tracks: {e}")
-            raise RuntimeError(f"Unexpected error: {e}")
+        return tracks
 
     @staticmethod
     def audio_features_to_vector(audio_features: dict) -> List[float]:
@@ -134,23 +136,40 @@ class SpotifyImporter:
     async def get_tracks_with_vectors(self, limit: int = 50) -> List[Dict]:
         """
         Fetch user's top tracks and convert to database-ready format.
-        
-        Runs the synchronous Spotify API calls in a thread pool to avoid blocking.
-        
-        Note: Uses loop.run_in_executor() for Python 3.8 compatibility
-              (asyncio.to_thread added in Python 3.9)
+
+        1. Fetches top tracks from Spotify (name, artist, track_id)
+        2. Fetches audio features from ReccoBeats using Spotify track IDs
+        3. Converts audio features to 11-D vectors
 
         Returns:
             List of dicts with: track_id, name, artist, vector (11-D)
         """
         # Run the synchronous Spotify API call in a thread pool
-        # Using run_in_executor for Python 3.8 compatibility
         loop = asyncio.get_event_loop()
         tracks = await loop.run_in_executor(None, self.fetch_user_top_tracks, limit)
-        
-        for track in tracks:
-            audio_features = track.pop("audio_features")
-            vector = self.audio_features_to_vector(audio_features)
-            track["vector"] = vector
-        
-        return tracks
+
+        if not tracks:
+            return []
+
+        # Fetch audio features from ReccoBeats for all tracks at once
+        track_ids = [t["track_id"] for t in tracks]
+        audio_features_list = await fetch_reccobeats_audio_features(track_ids)
+
+        result = []
+        for track, audio_features in zip(tracks, audio_features_list):
+            if audio_features is None:
+                self.logger.warning(f"Skipped {track['track_id']} (no audio features from ReccoBeats)")
+                continue
+            try:
+                vector = self.audio_features_to_vector(audio_features)
+                result.append({
+                    "track_id": track["track_id"],
+                    "name": track["name"],
+                    "artist": track["artist"],
+                    "vector": vector,
+                })
+            except Exception as e:
+                self.logger.warning(f"Failed to build vector for {track['track_id']}: {e}")
+                continue
+
+        return result

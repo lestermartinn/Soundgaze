@@ -29,6 +29,9 @@ from models import (
     SongGetResponse,
     SpotifyImportRequest,
     SpotifySyncResponse,
+    SimilarResponse,
+    SimilarSong,
+    SimilarRequest
 )
 from spotify import SpotifyImporter
 
@@ -239,3 +242,15 @@ async def sync_spotify_library(body: SpotifyImportRequest):
             status_code=400,
             detail=f"Failed to sync Spotify library: {str(e)}"
         )
+
+@app.post("/songs/similar", response_model=SimilarResponse)
+async def similar(body: SimilarRequest):
+    """Return the k most similar songs to a given 12D feature vector via Actian VectorAI cosine search."""
+    results = await search_similar(query_vector=body.vector, top_k=body.k)
+
+    return SimilarResponse(
+        results=[
+            SimilarSong(track_id=r["track_id"], score=r["score"])
+            for r in results
+        ]
+    ) # do not use SimilarResponse(results = result) for validation using SimilarSong model

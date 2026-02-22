@@ -166,3 +166,18 @@ class SpotifySyncResponse(BaseModel):
     failed_count: int = Field(..., description="Number of songs that failed to process")
     added_tracks: List[str] = Field(default_factory=list, description="Track IDs of newly added songs")
     merged_tracks: List[str] = Field(default_factory=list, description="Track IDs where user was merged")
+
+
+# -------------------------------------------------
+# Similarity
+# -------------------------------------------------
+class SimilarSong(BaseModel):
+    track_id: str
+    score: float
+
+class SimilarRequest(BaseModel):
+    vector: list[float]
+    k: int = 5  # default to 5 results
+
+class SimilarResponse(BaseModel):
+    results: list[SimilarSong]
