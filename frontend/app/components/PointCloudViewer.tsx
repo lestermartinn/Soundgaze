@@ -10,10 +10,10 @@ import type { SongPoint } from "../lib/api";
 // Colors
 // ---------------------------------------------------------------------------
 
-const COLOR_GLOBAL   = new THREE.Color("#4a4a5a");
-const COLOR_USER     = new THREE.Color("#1DB954");
+const COLOR_GLOBAL = new THREE.Color("#4a4a5a");
+const COLOR_USER = new THREE.Color("#1DB954");
 const COLOR_NEIGHBOR = new THREE.Color("#FF6B35");
-const COLOR_WALK     = new THREE.Color("#A855F7");
+const COLOR_WALK = new THREE.Color("#A855F7");
 
 // ---------------------------------------------------------------------------
 // Props
@@ -26,6 +26,7 @@ export interface PointCloudViewerProps {
   walkIds: Set<string>;
   coordMode: "raw" | "uniform";
   onPointClick: (point: SongPoint) => void;
+  selectedId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,12 +68,47 @@ function AutoRotate({
 // Inner scene — must live inside <Canvas>
 // ---------------------------------------------------------------------------
 
+function SelectedPoint({
+  point,
+  coordMode,
+  circleTexture,
+}: {
+  point: SongPoint;
+  coordMode: "raw" | "uniform";
+  circleTexture: THREE.CanvasTexture;
+}) {
+  const xyz = coordMode === "raw" ? point.xyz_raw : point.xyz_uniform;
+  const pos = useMemo(
+    () => new Float32Array([xyz[0] - 0.5, xyz[1] - 0.5, xyz[2] - 0.5]),
+    [xyz],
+  );
+  return (
+    <points renderOrder={999} frustumCulled={false}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[pos, 3]} />
+      </bufferGeometry>
+      <pointsMaterial
+        color="red"
+        map={circleTexture}
+        alphaTest={0.5}
+        size={0.06}
+        sizeAttenuation
+        depthTest={false}
+        depthWrite={false}
+        transparent
+        opacity={1}
+      />
+    </points>
+  );
+}
+
 function PointCloud({
   globalPoints,
   userSongIds,
   neighborIds,
   walkIds,
   coordMode,
+  selectedId,
   onHover,
   mouseNDC,
   hoveredRef,
@@ -92,19 +128,19 @@ function PointCloud({
 
     globalPoints.forEach((p, i) => {
       const xyz = coordMode === "raw" ? p.xyz_raw : p.xyz_uniform;
-      pos[i * 3]     = xyz[0] - 0.5;
+      pos[i * 3] = xyz[0] - 0.5;
       pos[i * 3 + 1] = xyz[1] - 0.5;
       pos[i * 3 + 2] = xyz[2] - 0.5;
 
       const c = neighborIds.has(p.track_id)
         ? COLOR_NEIGHBOR
         : walkIds.has(p.track_id)
-        ? COLOR_WALK
-        : userSongIds.has(p.track_id)
-        ? COLOR_USER
-        : COLOR_GLOBAL;
+          ? COLOR_WALK
+          : userSongIds.has(p.track_id)
+            ? COLOR_USER
+            : COLOR_GLOBAL;
 
-      col[i * 3]     = c.r;
+      col[i * 3] = c.r;
       col[i * 3 + 1] = c.g;
       col[i * 3 + 2] = c.b;
     });
@@ -147,23 +183,36 @@ function PointCloud({
     onHover(found);
   });
 
+  const selectedPoint = selectedId
+    ? globalPoints.find((p) => p.track_id === selectedId) ?? null
+    : null;
+
   return (
-    <points ref={meshRef} frustumCulled={false}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        <bufferAttribute attach="attributes-color"    args={[colors, 3]}    />
-      </bufferGeometry>
-      <pointsMaterial
-        vertexColors
-        map={circleTexture}
-        alphaTest={0.5}
-        size={0.04}
-        sizeAttenuation
-        depthWrite={false}
-        transparent
-        opacity={0.9}
-      />
-    </points>
+    <>
+      <points ref={meshRef} frustumCulled={false}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+          <bufferAttribute attach="attributes-color" args={[colors, 3]} />
+        </bufferGeometry>
+        <pointsMaterial
+          vertexColors
+          map={circleTexture}
+          alphaTest={0.5}
+          size={0.04}
+          sizeAttenuation
+          depthWrite={false}
+          transparent
+          opacity={0.9}
+        />
+      </points>
+      {selectedPoint && (
+        <SelectedPoint
+          point={selectedPoint}
+          coordMode={coordMode}
+          circleTexture={circleTexture}
+        />
+      )}
+    </>
   );
 }
 
@@ -172,7 +221,7 @@ function PointCloud({
 // ---------------------------------------------------------------------------
 
 export default function PointCloudViewer(props: PointCloudViewerProps) {
-  const { onPointClick, ...rest } = props;
+  const { onPointClick, selectedId, ...rest } = props;
   const [hoveredPoint, setHoveredPoint] = useState<SongPoint | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const mouseNDC = useRef<{ x: number; y: number } | null>(null);
@@ -187,8 +236,8 @@ export default function PointCloudViewer(props: PointCloudViewerProps) {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
     mouseNDC.current = {
-      x:  ((e.clientX - rect.left)  / rect.width)  * 2 - 1,
-      y: -((e.clientY - rect.top)   / rect.height) * 2 + 1,
+      x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
     };
   }, []);
 
@@ -230,6 +279,7 @@ export default function PointCloudViewer(props: PointCloudViewerProps) {
       >
         <PointCloud
           {...rest}
+          selectedId={selectedId}
           onHover={setHoveredPoint}
           mouseNDC={mouseNDC}
           hoveredRef={hoveredRef}

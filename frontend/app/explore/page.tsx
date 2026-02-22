@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Navbar from "../components/Navbar";
@@ -8,7 +8,7 @@ import PointCloudViewer from "../components/PointCloudViewer";
 import ControlsOverlay, { ExploreMode } from "../components/ControlsOverlay";
 import DensitySlider, { Topology } from "../components/DensitySlider";
 import SongSidebar, { SongData } from "../components/SongSidebar";
-import { fetchPoints, fetchSimilar, fetchWalk, type SongPoint, type WalkStep } from "../lib/api";
+import { fetchPoints, fetchSimilar, fetchWalk, type SongPoint, type WalkStep, type PointsResponse } from "../lib/api";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -19,31 +19,36 @@ export default function ExplorePage() {
   const router = useRouter();
 
   // Point cloud
-  const [globalPoints, setGlobalPoints]     = useState<SongPoint[]>([]);
+  const [globalPoints, setGlobalPoints] = useState<SongPoint[]>([]);
   const [neighborPoints, setNeighborPoints] = useState<SongPoint[]>([]);
-  const [userSongIds, setUserSongIds]       = useState<Set<string>>(new Set());
-  const [neighborIds, setNeighborIds]       = useState<Set<string>>(new Set());
+  const [userSongIds, setUserSongIds] = useState<Set<string>>(new Set());
+  const [neighborIds, setNeighborIds] = useState<Set<string>>(new Set());
 
   // Sidebar
   const [selectedSong, setSelectedSong] = useState<SongData | null>(null);
-  const [sidebarOpen, setSidebarOpen]   = useState(false);
-  const [isSaving, setIsSaving]         = useState(false);
-  const [saveStatus, setSaveStatus]     = useState<"idle" | "saved" | "error">("idle");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
 
   // Walk
-  const [walkPoints, setWalkPoints]       = useState<SongPoint[]>([]);
-  const [walkIds, setWalkIds]             = useState<Set<string>>(new Set());
-  const [walkSteps, setWalkSteps]         = useState<WalkStep[]>([]);
-  const [isWalking, setIsWalking]         = useState(false);
+  const [walkPoints, setWalkPoints] = useState<SongPoint[]>([]);
+  const [walkIds, setWalkIds] = useState<Set<string>>(new Set());
+  const [walkSteps, setWalkSteps] = useState<WalkStep[]>([]);
+  const [isWalking, setIsWalking] = useState(false);
   const [walkStepIndex, setWalkStepIndex] = useState(0);
 
   // Controls
-  const [exploreMode, setExploreMode]   = useState<ExploreMode>("manual");
+  const [exploreMode, setExploreMode] = useState<ExploreMode>("manual");
   const [pointDensity, setPointDensity] = useState(50);
-  const [topology, setTopology]         = useState<Topology>("uniform");
+  const [topology, setTopology] = useState<Topology>("uniform");
   const coordMode = topology === "uniform" ? "uniform" : "raw";
-  const [isLoadingPoints, setIsLoadingPoints] = useState(false);
   void exploreMode;
+
+  // Cache: stores the largest dataset fetched so far.
+  // Slider moving DOWN subsamples from this — no network call.
+  // Slider moving UP beyond cache size triggers a backend fetch.
+  const pointCacheRef = useRef<PointsResponse | null>(null);
+  const cacheUserIdRef = useRef<string | undefined>(undefined);
 
   // Auth guard
   useEffect(() => {
@@ -56,12 +61,39 @@ export default function ExplorePage() {
     const userId = (session as { spotifyId?: string } | null)?.spotifyId ?? undefined;
     const t = pointDensity / 100;
     const n = Math.min(5000, Math.max(10, Math.round(t * t * 5000)));
-    setIsLoadingPoints(true);
+
+    // Invalidate cache when user changes (e.g. different login)
+    if (userId !== cacheUserIdRef.current) {
+      pointCacheRef.current = null;
+      cacheUserIdRef.current = userId;
+    }
+
+    const cache = pointCacheRef.current;
+    const cacheSize = cache
+      ? cache.global_sample.length + cache.user_songs.length
+      : 0;
+
+    // ── Cache hit: subsample locally, no network call ──────────────────────
+    if (cache && n <= cacheSize) {
+      const userIds = new Set(cache.user_songs.map((p) => p.track_id));
+      const nGlobal = Math.max(0, n - cache.user_songs.length);
+      const globalSub = cache.global_sample.slice(0, nGlobal);
+      const globalIds = new Set(globalSub.map((p) => p.track_id));
+      const merged = [
+        ...globalSub,
+        ...cache.user_songs.filter((p) => !globalIds.has(p.track_id)),
+      ];
+      setGlobalPoints(merged);
+      setUserSongIds(userIds);
+      return;
+    }
+
+    // ── Cache miss: fetch from backend, then update cache ─────────────────
     const timer = setTimeout(async () => {
       try {
         const data = await fetchPoints(n, userId);
+        pointCacheRef.current = data; // store as new high-water mark
         const userIds = new Set(data.user_songs.map((p) => p.track_id));
-        // Merge user songs into the rendered set so they always appear in the cloud
         const globalIds = new Set(data.global_sample.map((p) => p.track_id));
         const merged = [
           ...data.global_sample,
@@ -71,8 +103,6 @@ export default function ExplorePage() {
         setUserSongIds(userIds);
       } catch (err) {
         console.error("fetchPoints failed", err);
-      } finally {
-        setIsLoadingPoints(false);
       }
     }, 400);
     return () => clearTimeout(timer);
@@ -155,11 +185,11 @@ export default function ExplorePage() {
         allWalkIds.add(step.track_id);
         if (!existingIds.has(step.track_id) && step.xyz_raw && step.xyz_uniform) {
           newWalkPoints.push({
-            track_id:    step.track_id,
-            name:        step.name    ?? "",
-            artist:      step.artist  ?? "",
-            genre:       step.genre   ?? "",
-            xyz_raw:     step.xyz_raw     as [number, number, number],
+            track_id: step.track_id,
+            name: step.name ?? "",
+            artist: step.artist ?? "",
+            genre: step.genre ?? "",
+            xyz_raw: step.xyz_raw as [number, number, number],
             xyz_uniform: step.xyz_uniform as [number, number, number],
           });
         }
@@ -233,23 +263,11 @@ export default function ExplorePage() {
             walkIds={walkIds}
             coordMode={coordMode}
             onPointClick={onSongSelect}
+            selectedId={selectedSong?.id ?? null}
           />
         </div>
 
-        {/* ── Loading spinner ── */}
-        {isLoadingPoints && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
-            <div
-              className="rounded-full border-2 border-transparent animate-spin"
-              style={{
-                width: 40,
-                height: 40,
-                borderTopColor: "#1DB954",
-                borderRightColor: "rgba(29,185,84,0.3)",
-              }}
-            />
-          </div>
-        )}
+
 
         {/* ── Corner green vignettes ── */}
         <div
