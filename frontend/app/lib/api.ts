@@ -26,6 +26,25 @@ export interface DescribeResponse {
   description: string;
 }
 
+export interface WalkStep {
+  step: number;
+  track_id: string;
+  name?: string;
+  artist?: string;
+  genre?: string;
+  transition_score?: number;
+  restarted: boolean;
+  xyz_raw?: [number, number, number];
+  xyz_uniform?: [number, number, number];
+}
+
+export interface WalkResponse {
+  seed_track_id: string;
+  steps_returned: number;
+  temperature: number;
+  path: WalkStep[];
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // Set to true to use mock data
@@ -99,6 +118,23 @@ export async function fetchPoints(n: number, userId?: string): Promise<PointsRes
     global_sample: data.global_songs as SongPoint[],
     user_songs:    data.user_songs   as SongPoint[],
   };
+}
+
+/**
+ * Run a random walk starting from a seed track.
+ * Backend: GET /songs/{track_id}/walk
+ */
+export async function fetchWalk(
+  trackId: string,
+  opts: { steps?: number; temperature?: number } = {},
+): Promise<WalkResponse> {
+  const params = new URLSearchParams({
+    steps:       String(opts.steps       ?? 10),
+    temperature: String(opts.temperature ?? 0.8),
+  });
+  const res = await fetch(`${API_BASE}/songs/${encodeURIComponent(trackId)}/walk?${params}`);
+  if (!res.ok) throw new Error(`fetchWalk failed: ${res.status}`);
+  return res.json();
 }
 
 /**

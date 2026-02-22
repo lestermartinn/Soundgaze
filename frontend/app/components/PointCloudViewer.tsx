@@ -13,6 +13,7 @@ import type { SongPoint } from "../lib/api";
 const COLOR_GLOBAL   = new THREE.Color("#4a4a5a");
 const COLOR_USER     = new THREE.Color("#1DB954");
 const COLOR_NEIGHBOR = new THREE.Color("#FF6B35");
+const COLOR_WALK     = new THREE.Color("#A855F7");
 
 // ---------------------------------------------------------------------------
 // Props
@@ -22,6 +23,7 @@ export interface PointCloudViewerProps {
   globalPoints: SongPoint[];
   userSongIds: Set<string>;
   neighborIds: Set<string>;
+  walkIds: Set<string>;
   coordMode: "raw" | "uniform";
   onPointClick: (point: SongPoint) => void;
 }
@@ -69,6 +71,7 @@ function PointCloud({
   globalPoints,
   userSongIds,
   neighborIds,
+  walkIds,
   coordMode,
   onHover,
   mouseNDC,
@@ -95,6 +98,8 @@ function PointCloud({
 
       const c = neighborIds.has(p.track_id)
         ? COLOR_NEIGHBOR
+        : walkIds.has(p.track_id)
+        ? COLOR_WALK
         : userSongIds.has(p.track_id)
         ? COLOR_USER
         : COLOR_GLOBAL;
@@ -105,7 +110,7 @@ function PointCloud({
     });
 
     return { positions: pos, colors: col };
-  }, [globalPoints, userSongIds, neighborIds, coordMode]);
+  }, [globalPoints, userSongIds, neighborIds, walkIds, coordMode]);
 
   // Screen-space hover: project every point to NDC each frame and find the
   // nearest to the cursor in 2D. Immune to 3D threshold issues.

@@ -321,72 +321,38 @@ async def sync_spotify_library(body: SpotifyImportRequest):
         added_tracks = []
         merged_tracks = []
 
-        client = get_db()
-
         for track in tracks:
             try:
                 track_id = track["track_id"]
-                vector   = track["vector"]
-                name     = track["name"]
-                artist   = track["artist"]
+                vector = track["vector"]
+                name = track["name"]
+                artist = track["artist"]
 
-                # ── 8D collection ──────────────────────────────────────────
-                existing_8d = await get_song(track_id)
+                # Check if song already exists
+                existing = await get_song(track_id)
+                
+                # Upsert with user_id (handles merge internally)
                 await upsert_song(
                     track_id=track_id,
                     vector=vector,
                     name=name,
                     artist=artist,
-                    genre=None,
+                    genre=None,  # Spotify doesn't provide genre at track level
                     user_id=body.user_id,
                 )
-                if existing_8d is None:
+
+                if existing is None:
                     songs_added += 1
                     added_tracks.append(track_id)
-                elif body.user_id not in existing_8d.get("user_ids", []):
-                    songs_merged += 1
-                    merged_tracks.append(track_id)
-
-                # ── 3D collection ──────────────────────────────────────────
-                # Try to load existing 3D record to preserve coords + merge user_ids
-                xyz_raw     = None
-                xyz_uniform = None
-                existing_3d_user_ids: list[str] = []
-                try:
-                    vec_3d, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
-                    p = pay_3d or {}
-                    existing_3d_user_ids = p.get("user_ids", [])
-                    xyz_raw     = p.get("xyz_raw")
-                    xyz_uniform = p.get("xyz_uniform")
-                    if not vec_3d:
-                        xyz_raw = xyz_uniform = None
-                except Exception:
-                    pass  # song not in 3D collection yet
-
-                # Compute 3D coords only if missing
-                if not xyz_raw or not xyz_uniform:
-                    arr         = np.array([vector], dtype=np.float32)
-                    raw_arr     = get_reducer().transform(arr)
-                    uni_arr     = get_quantiler().transform(raw_arr)
-                    xyz_raw     = [float(v) for v in normalize_raw_coords(raw_arr)[0]]
-                    xyz_uniform = [float(v) for v in uni_arr[0]]
-
-                merged_3d_user_ids = list(set(existing_3d_user_ids + [body.user_id]))
-
-                await upsert_song_3d(
-                    track_id=track_id,
-                    vector_3d=xyz_raw,
-                    payload={
-                        "track_id":   track_id,
-                        "name":       name,
-                        "artist":     artist,
-                        "xyz_raw":    xyz_raw,
-                        "xyz_uniform": xyz_uniform,
-                        "user_ids":   merged_3d_user_ids,
-                    },
-                )
+                else:
+                    # Check if user was already in the list
+                    existing_user_ids = existing.get("user_ids", [])
+                    if body.user_id not in existing_user_ids:
+                        songs_merged += 1
+                        merged_tracks.append(track_id)
 
             except Exception as e:
+                logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to process track {track.get('track_id', 'unknown')}: {e}")
                 failed_count += 1
 
@@ -420,6 +386,8 @@ async def similar(body: SimilarRequest):
         ]
     ) # do not use SimilarResponse(results = result) for validation using SimilarSong model
 '''
+from typing import Any
+
 @app.get("/songs/{song_id}/similar")
 async def get_similar_songs(song_id: str, n: int = 10) -> Any:
     song = await get_song(song_id)
@@ -442,25 +410,18 @@ async def get_similar_songs(song_id: str, n: int = 10) -> Any:
             continue
 
         seen_ids.add(track_id)
+        result = {**s}
 
         try:
             vector_3d, payload_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
-            if not vector_3d:
-                continue
-            p = payload_3d or {}
-            xyz_raw     = p.get("xyz_raw")
-            xyz_uniform = p.get("xyz_uniform")
-            if not xyz_raw or not xyz_uniform:
-                continue
+            if vector_3d:
+                result["vector_3d"] = list(vector_3d)
+                result["xyz_raw"] = (payload_3d or {}).get("xyz_raw")
+                result["xyz_uniform"] = (payload_3d or {}).get("xyz_uniform")
         except Exception as e:
             logging.getLogger(__name__).debug(f"No 3D record for '{track_id}': {e}")
-            continue
 
-        results.append({
-            **s,
-            "xyz_raw":     xyz_raw,
-            "xyz_uniform": xyz_uniform,
-        })
+        results.append(result)
         if len(results) >= n:
             break
 
@@ -519,6 +480,11 @@ async def random_walk_songs(
     scaled_temperature = 0.05 + (temperature * 1.95)
     effective_k = max(2, min(k, int(round(2 + (k - 2) * temperature))))
     search_k = min(max(k * 4, k + 10), 500)
+    exploration_pool_k = max(
+        effective_k,
+        min(search_k, int(round(effective_k + (search_k - effective_k) * temperature))),
+    )
+    exploration_rate = min(0.85, temperature * temperature)
 
     path: list[RandomWalkStep] = [
         RandomWalkStep(
@@ -535,6 +501,7 @@ async def random_walk_songs(
     song_cache: dict[str, dict] = {track_id: seed_song}
     current_track_id = track_id
     current_vector = list(seed_vector)
+    exploratory_steps = 0
 
     for step_idx in range(1, steps + 1):
         restarted = False
@@ -548,6 +515,7 @@ async def random_walk_songs(
 
         candidates: list[dict] = []
         seen_ids: set[str] = set()
+        candidate_limit = search_k
 
         for item in similar:
             candidate_id = str(item.get("track_id", "")).strip()
@@ -560,7 +528,7 @@ async def random_walk_songs(
 
             seen_ids.add(candidate_id)
             candidates.append(item)
-            if len(candidates) >= k:
+            if len(candidates) >= candidate_limit:
                 break
 
         if not candidates:
@@ -575,13 +543,23 @@ async def random_walk_songs(
                     continue
                 seen_ids.add(candidate_id)
                 candidates.append(item)
-                if len(candidates) >= k:
+                if len(candidates) >= candidate_limit:
                     break
 
         if not candidates:
             break
 
-        sampled_pool = candidates[:effective_k]
+        local_pool = candidates[:effective_k]
+        explore_pool_end = min(len(candidates), exploration_pool_k)
+        exploratory_pool = candidates[effective_k:explore_pool_end]
+
+        use_explore_pool = bool(exploratory_pool) and rng.random() < exploration_rate
+        if use_explore_pool:
+            sampled_pool = exploratory_pool
+            exploratory_steps += 1
+        else:
+            sampled_pool = local_pool if local_pool else candidates[:explore_pool_end]
+
         picked = _choose_weighted_candidate(sampled_pool, scaled_temperature, rng)
         next_track_id = str(picked.get("track_id"))
 
@@ -610,14 +588,140 @@ async def random_walk_songs(
         current_track_id = next_track_id
         current_vector = list(next_vector)
 
+    # Fetch 3D coords for all path steps in parallel
+    client = get_db()
+
+    async def _fetch_xyz(tid: str) -> tuple[str, list | None, list | None]:
+        try:
+            _, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(tid))
+            p = pay_3d or {}
+            return tid, p.get("xyz_raw"), p.get("xyz_uniform")
+        except Exception:
+            return tid, None, None
+
+    xyz_results = await asyncio.gather(*[_fetch_xyz(s.track_id) for s in path])
+    xyz_map = {tid: (raw, uni) for tid, raw, uni in xyz_results}
+
+    path = [
+        s.model_copy(update={
+            "xyz_raw":     xyz_map.get(s.track_id, (None, None))[0],
+            "xyz_uniform": xyz_map.get(s.track_id, (None, None))[1],
+        })
+        for s in path
+    ]
+
     return RandomWalkResponse(
         seed_track_id=track_id,
         steps_requested=steps,
         steps_returned=max(0, len(path) - 1),
         k=k,
         effective_k=effective_k,
+        exploration_pool_k=exploration_pool_k,
+        exploration_rate=exploration_rate,
+        exploratory_steps=exploratory_steps,
         temperature=temperature,
         restart_prob=restart_prob,
         no_repeat_window=no_repeat_window,
         path=path,
     )
+
+@app.post("/songs/spotify/top-frequent")
+async def get_spotify_top_frequent(body: SpotifyImportRequest):
+    try:
+        importer = SpotifyImporter(body.access_token)
+        tracks = await importer.get_top_tracks_with_vectors(limit=body.limit)
+
+        songs_added = 0
+        songs_merged = 0
+        failed_count = 0
+        client = get_db()
+
+        for track in tracks:
+            try:
+                track_id = track["track_id"]
+                vector   = track["vector"]
+                name     = track["name"]
+                artist   = track["artist"]
+
+                # ── 8D collection ──────────────────────────────────────────
+                existing_8d = await get_song(track_id)
+                await upsert_song(
+                    track_id=track_id,
+                    vector=vector,
+                    name=name,
+                    artist=artist,
+                    genre=None,
+                    user_id=body.user_id,
+                )
+                if existing_8d is None:
+                    songs_added += 1
+                elif body.user_id not in existing_8d.get("user_ids", []):
+                    songs_merged += 1
+
+                # ── 3D collection ──────────────────────────────────────────
+                xyz_raw     = None
+                xyz_uniform = None
+                existing_3d_user_ids: list[str] = []
+                try:
+                    vec_3d, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
+                    p = pay_3d or {}
+                    existing_3d_user_ids = p.get("user_ids", [])
+                    xyz_raw     = p.get("xyz_raw")
+                    xyz_uniform = p.get("xyz_uniform")
+                    if not vec_3d:
+                        xyz_raw = xyz_uniform = None
+                except Exception:
+                    pass
+
+                if not xyz_raw or not xyz_uniform:
+                    arr         = np.array([vector], dtype=np.float32)
+                    raw_arr     = get_reducer().transform(arr)
+                    uni_arr     = get_quantiler().transform(raw_arr)
+                    xyz_raw     = [float(v) for v in raw_arr[0]]
+                    xyz_uniform = [float(v) for v in uni_arr[0]]
+
+                track["xyz_raw"] = xyz_raw  # store back for response
+                track["xyz_uniform"] = xyz_uniform
+
+                merged_3d_user_ids = list(set(existing_3d_user_ids + [body.user_id]))
+
+                await upsert_song_3d(
+                    track_id=track_id,
+                    vector_3d=xyz_raw,
+                    payload={
+                        "track_id":    track_id,
+                        "name":        name,
+                        "artist":      artist,
+                        "xyz_raw":     xyz_raw,
+                        "xyz_uniform": xyz_uniform,
+                        "user_ids":    merged_3d_user_ids,
+                    },
+                )
+
+            except Exception as e:
+                logger.warning(f"Failed to process track {track.get('track_id', 'unknown')}: {e}")
+                failed_count += 1
+
+        response_tracks = [
+            {
+                "track_id": t["track_id"],
+                "name":     t["name"],
+                "artist":   t["artist"],
+                "rank":     t["rank"],
+                "vector":   t.get("xyz_raw"),
+                "xyz_raw":     t.get("xyz_raw"),      # add this
+                "xyz_uniform": t.get("xyz_uniform"),  # add this
+            }
+            for t in tracks
+        ]
+
+        return {
+            "songs": response_tracks,
+            "songs_added": songs_added,
+            "songs_merged": songs_merged,
+            "total_processed": len(tracks),
+            "failed_count": failed_count,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch top tracks: {str(e)}")

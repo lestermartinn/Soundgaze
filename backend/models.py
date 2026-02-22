@@ -151,6 +151,8 @@ class RandomWalkStep(BaseModel):
     genre: Optional[str] = None
     transition_score: Optional[float] = None
     restarted: bool = False
+    xyz_raw: Optional[List[float]] = None
+    xyz_uniform: Optional[List[float]] = None
 
 
 class RandomWalkResponse(BaseModel):
@@ -159,6 +161,9 @@ class RandomWalkResponse(BaseModel):
     steps_returned: int
     k: int
     effective_k: int
+    exploration_pool_k: int
+    exploration_rate: float
+    exploratory_steps: int
     temperature: float
     restart_prob: float
     no_repeat_window: int

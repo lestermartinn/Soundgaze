@@ -167,3 +167,53 @@ class SpotifyImporter:
                 continue
 
         return result
+    
+    def fetch_user_top_tracks_by_popularity(self, limit: int = 50, time_range: str = "medium_term") -> List[Dict]:
+        results = self.sp.current_user_top_tracks(limit=limit, time_range=time_range)
+        items = results.get("items", [])
+
+        tracks = []
+        for i, track in enumerate(items):
+            track_id = track.get("id")
+            if not track_id:
+                continue
+            tracks.append({
+                "track_id": track_id,
+                "name":     track.get("name"),
+                "artist":   ", ".join([a["name"] for a in track.get("artists", [])]),
+                "rank":     i + 1,
+            })
+
+        return tracks
+
+    async def get_top_tracks_with_vectors(self, limit: int = 50, time_range: str = "medium_term") -> List[Dict]:
+        loop = asyncio.get_event_loop()
+        tracks = await loop.run_in_executor(None, self.fetch_user_top_tracks_by_popularity, limit, time_range)
+
+        if not tracks:
+            return []
+
+        track_ids = [t["track_id"] for t in tracks]
+        audio_features_list = await fetch_reccobeats_audio_features(track_ids)
+
+        result = []
+        for track, audio_features in zip(tracks, audio_features_list):
+            if audio_features is None:
+                self.logger.warning(f"Skipped {track['track_id']} (no audio features from ReccoBeats)")
+                continue
+            try:
+                vector = self.audio_features_to_vector(audio_features)
+                result.append({
+                    "track_id": track["track_id"],
+                    "name":     track["name"],
+                    "artist":   track["artist"],
+                    "rank":     track["rank"],
+                    "vector":   vector,
+                })
+            except Exception as e:
+                self.logger.warning(f"Failed to build vector for {track['track_id']}: {e}")
+                continue
+
+        return result
+    
+    
