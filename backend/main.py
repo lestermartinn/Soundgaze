@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D, sample_song_pool, upsert_song, get_song
+from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D, sample_song_pool, upsert_song, get_song, song_id_to_int
 from ingest import ingest_if_needed
 from models import (
     RecommendRequest,
@@ -412,8 +412,6 @@ async def similar(body: SimilarRequest):
         ]
     ) # do not use SimilarResponse(results = result) for validation using SimilarSong model
 '''
-from typing import Any
-
 @app.get("/songs/{song_id}/similar")
 async def get_similar_songs(song_id: str, n: int = 10) -> Any:
     song = await get_song(song_id)
@@ -452,3 +450,17 @@ async def get_similar_songs(song_id: str, n: int = 10) -> Any:
             break
 
     return {"songs": results}
+
+
+@app.get("/songs/{track_id}/prev-url")
+async def get_track_prev_url(track_id: str) -> Any:
+    """Return Spotify preview URL for a given track_id."""
+    song = await get_song(track_id)
+    if not song:
+        raise HTTPException(status_code=404, detail=f"Song '{track_id}' not found.")
+
+    spotify_url = f"https://open.spotify.com/track/{track_id}"
+    return {
+        "track_id": track_id,
+        "preview_url": spotify_url,
+    }
