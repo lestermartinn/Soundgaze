@@ -1,143 +1,220 @@
-# Hacklytics 2025 — Hackathon Boilerplate
+# Soundgaze (Hacklytics 2026)
 
-> Explore your musical DNA as coordinates in an interactive 3-D universe. Find your **Topological Twins** — songs from different corners of the world that share nearly identical audio fingerprints.
+Explore music as a 3D universe. Soundgaze maps tracks into a point cloud, lets users inspect nearest-neighbor relationships, and runs controllable random walks through sonically similar songs.
 
-## Stack
+## What this repo contains
 
-| Layer | Tech |
-|---|---|
-| Frontend | Next.js 14 (App Router) + TypeScript + Tailwind CSS |
-| 3-D Rendering | Three.js via `@react-three/fiber` + `@react-three/drei` |
-| Backend | FastAPI (Python 3.11+) |
-| Vector DB | Actian VectorAI DB (gRPC, HNSW index, COSINE similarity) |
-| ML — Mapping | UMAP 3-D reduction (`umap-learn`) |
-| Spotify Data | `spotipy` |
+- `frontend/`: Next.js 14 app (Spotify auth, 3D viewer, walkthrough UI).
+- `backend/`: FastAPI API (Actian VectorAI integration, ingest, similarity, random walk, Gemini descriptions).
+- `backend/docker-compose.yml`: local Actian VectorAI DB container.
+- `backend/data/`: dataset + persisted vector DB files + saved UMAP artifacts.
 
----
+## Architecture
 
-## Quick Start
+- **Frontend**: Next.js + React + Tailwind + `@react-three/fiber` / `three`.
+- **Backend**: FastAPI + Pydantic.
+- **Vector store**: Actian VectorAI DB over gRPC (`localhost:50051`).
+- **Embeddings**:
+    - 8D normalized audio-feature vectors in collection `songs`.
+    - 3D UMAP coordinates in collection `songs_3d` (`xyz_raw` and `xyz_uniform`).
+- **External APIs**:
+    - Spotify OAuth + Web API (via NextAuth + `spotipy`).
+    - Gemini (`google-genai`) for song description text.
 
-See [`docs/SETUP.md`](docs/SETUP.md) for the full walkthrough. Short version:
+## Prerequisites
 
-### 1. Vector DB (Docker)
+- **Windows (PowerShell)** commands are shown below.
+- Python 3.11+
+- Node.js 18+
+- Docker Desktop
+- Git
 
-```bash
-cd backend
+## Environment variables
+
+Create env files before running:
+
+### `frontend/.env.local`
+
+```env
+NEXTAUTH_URL=http://127.0.0.1:3000
+NEXTAUTH_SECRET=replace-with-a-random-secret
+
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+
+# Optional: backend base URL used in auth callback sync
+API_BASE=http://localhost:8000
+
+# Optional override for frontend API client
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+### `backend/.env` (optional, but recommended)
+
+```env
+# Optional override; default already points to local docker db
+VECTOR_DB_URL=localhost:50051
+
+# Required only for /songs/describe
+GEMINI_API_KEY=your_gemini_api_key
+
+# Optional ingest controls
+DATASET_PATH=data/spotify_songs.csv
+INGEST_BATCH_SIZE=500
+FORCE_REINGEST=false
+```
+
+## One-time setup
+
+### 1) Start Vector DB
+
+```powershell
+Set-Location backend
 docker compose up -d
-# pulls williamimoh/actian-vectorai-db:1.0b and starts it on port 50051
 ```
 
-### 2. Backend (FastAPI)
+### 2) Create backend venv + install deps
 
-```bash
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
+```powershell
+Set-Location backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-# Install the Actian Python client (not on PyPI -- one-time)
-# Clone it somewhere outside this project, then install the .whl
-cd ~
+### 3) Install Actian Python wheel (required)
+
+The `cortex` client is not published on PyPI.
+
+```powershell
+Set-Location ..
 git clone https://github.com/hackmamba-io/actian-vectorAI-db-beta
-cd ~/path/to/Hacklytics/backend
-pip install ~/actian-vectorAI-db-beta/actiancortex-0.1.0b1-py3-none-any.whl
-
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+Set-Location backend
+python -m pip install ..\actian-vectorAI-db-beta\actiancortex-0.1.0b1-py3-none-any.whl
 ```
 
-API docs: `http://localhost:8000/docs`
+### 4) Install frontend deps
 
-### 3. Frontend (Next.js)
-
-```bash
-cd frontend
+```powershell
+Set-Location ..\frontend
 npm install
+```
+
+## Run locally
+
+Open 3 terminals.
+
+### Terminal A: Vector DB
+
+```powershell
+Set-Location backend
+docker compose up -d
+```
+
+### Terminal B: Backend API
+
+```powershell
+Set-Location backend
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+Notes:
+- On first startup, backend ingest runs if collections are empty.
+- This creates UMAP artifacts in `backend/data/` and populates both collections.
+
+### Terminal C: Frontend
+
+```powershell
+Set-Location frontend
 npm run dev
 ```
 
-App: `http://localhost:3000` — Next.js proxies `/api/py/*` to `localhost:8000`.
+Open:
+- App: `http://127.0.0.1:3000`
+- FastAPI docs: `http://127.0.0.1:8000/docs`
 
----
+## Dataset expectations
 
-## Project Structure
+Default ingest expects:
 
-```
-Hacklytics/
-├── docs/
-│   └── SETUP.md                    Full setup walkthrough
-│
-├── frontend/
-│   ├── next.config.js              Proxies /api/py/* -> localhost:8000
-│   ├── tailwind.config.ts          Custom design tokens
-│   ├── package.json
-│   └── app/
-│       ├── layout.tsx
-│       ├── globals.css             Tailwind directives + base styles
-│       ├── page.tsx                Home page: health check + recommendation sidebar
-│       └── components/
-│           └── PointCloudViewer.tsx  Three.js canvas, OrbitControls, click handler
-│
-└── backend/
-    ├── docker-compose.yml          Runs the Actian VectorAI DB container
-    ├── main.py                     FastAPI app + routes (add yours here)
-    ├── db.py                       Actian VectorAI DB client + helper functions
-    ├── models.py                   Pydantic models: AudioFeatures (12-D), requests/responses
-    ├── mapping.py                  UMAP 3-D projection placeholder
-    ├── similarity.py               Cosine similarity reference (superseded by vector DB)
-    └── requirements.txt
-```
+- `backend/data/spotify_songs.csv`
 
----
+If your dataset is elsewhere, set `DATASET_PATH` in `backend/.env`.
 
-## Adding a New Route
+## Main API endpoints
 
-**1. Add a Pydantic model in `backend/models.py`:**
-```python
-class MyRequest(BaseModel):
-    song_id: str
+- `GET /health`: health/version.
+- `POST /songs/pool`: fetch point cloud sample for user/global songs.
+- `POST /songs/recommend`: top-k nearest neighbors for one track.
+- `GET /songs/{song_id}`: fetch song record from 8D collection.
+- `GET /songs/{song_id}/similar?n=10`: similar songs enriched with 3D payload when available.
+- `GET /songs/{track_id}/walk?...`: random-walk traversal (temperature, restart, no-repeat controls).
+- `GET /songs/describe?name=...&artist=...&genre=...`: Gemini-generated short description.
+- `POST /songs/spotify/sync`: sync user library from Spotify token.
+- `POST /songs/spotify/top-frequent`: import user top tracks by popularity.
+- `GET /songs/3d/all`: dump full 3D collection payload.
+- `GET /debug/songs_3d?n=5`: debug sample from 3D collection.
 
-class MyResponse(BaseModel):
-    result: str
+## Helpful validation scripts
+
+From `backend/` with venv active:
+
+```powershell
+python scripts\smoke_test_backend.py --base-url http://127.0.0.1:8000
+python scripts\critical_endpoint_test.py --base-url http://127.0.0.1:8000
+python scripts\validate_umap.py
 ```
 
-**2. Add a DB helper in `backend/db.py`** (use `search_similar` as reference):
-```python
-async def my_db_query(song_id: str) -> dict:
-    client = get_db()
-    # ... call client.search(), client.get(), client.upsert(), etc.
+## Troubleshooting
+
+### `ModuleNotFoundError: cortex`
+
+Install the Actian `.whl` (see setup step 3). Do not use deprecated `cortex-client` package.
+
+### Backend `Failed to fetch` from frontend
+
+- Confirm backend is running on `127.0.0.1:8000`.
+- Confirm `NEXT_PUBLIC_API_URL`/`API_BASE` values.
+- Check endpoint-specific requirements:
+    - `/songs/describe` requires `GEMINI_API_KEY`.
+    - Spotify sync requires valid user token.
+
+### Uvicorn exits immediately
+
+- Make sure you run from `backend/` and the venv is active.
+- Verify imports compile:
+
+```powershell
+Set-Location backend
+.\.venv\Scripts\Activate.ps1
+python -m py_compile main.py
 ```
 
-**3. Add a route in `backend/main.py`** (use `/songs/recommend` as reference):
-```python
-@app.post("/my-route", response_model=MyResponse)
-async def my_route(body: MyRequest):
-    result = await my_db_query(body.song_id)
-    return MyResponse(result=result)
+### Re-ingest from scratch
+
+```powershell
+Set-Location backend
+.\.venv\Scripts\Activate.ps1
+$env:FORCE_REINGEST='true'
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
----
+## Key code locations
 
-## Key TODOs
+- Backend entry: `backend/main.py`
+- DB client/helpers: `backend/db.py`
+- Ingest pipeline: `backend/ingest.py`
+- UMAP + normalization: `backend/mapping.py`
+- Spotify ingestion: `backend/spotify.py`
+- Frontend explore page: `frontend/app/explore/page.tsx`
+- 3D renderer: `frontend/app/components/PointCloudViewer.tsx`
+- API client (frontend): `frontend/app/lib/api.ts`
+- NextAuth Spotify route: `frontend/app/api/auth/[...nextauth]/route.ts`
 
-| File | What to implement |
-|---|---|
-| `backend/mapping.py` | Uncomment the real UMAP block |
-| `backend/main.py` | Add Spotify OAuth + audio feature ingestion route |
-| `frontend/app/components/PointCloudViewer.tsx` | Fetch real UMAP points from `/api/py/songs/embed` |
+## Notes for contributors
 
-## API Reference
-
-### `GET /health`
-Liveness probe called by the frontend on page load.
-```json
-{ "status": "ok", "version": "0.1.0" }
-```
-
-### `POST /songs/recommend`
-Find top-k Topological Twins for a given song.
-```json
-// Request
-{ "song_id": "song_42", "top_k": 5 }
-
-// Response
-{ "query_id": "song_42", "recommendations": ["song_7", ...], "scores": [0.98, ...] }
-```
+- Keep vector dimensionality consistent between models and DB helpers when editing ingest/sync flows.
+- Prefer adding/adjusting endpoints in `backend/main.py` with typed models in `backend/models.py`.
+- If traversal visuals are changed, test both manual and auto-play flow in `frontend/app/explore/page.tsx` + `PointCloudViewer.tsx`.
