@@ -1,215 +1,198 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useSession } from "next-auth/react";
+import { useEffect, useState } from "react";
+import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import Navbar from "./components/Navbar";
-import PointCloudViewer from "./components/PointCloudViewer";
-import ControlsOverlay, { ExploreMode } from "./components/ControlsOverlay";
-import DensitySlider from "./components/DensitySlider";
+import Waves from "./components/Waves";
 
 // ---------------------------------------------------------------------------
-// Types
+// Feature callouts
 // ---------------------------------------------------------------------------
 
-interface SelectedSong {
-  id: string;
-  title?: string;
-  artist?: string;
-  albumArt?: string;
-  culturalDescription?: string;
-  previewUrl?: string;
+const FEATURES = [
+  { countTo: 50,   suffix: "M+", label: "Tracks",     detail: "Mapped in 3D space",              delay: 0   },
+  { countTo: 3,    suffix: "D",  label: "UMAP Space",  detail: "12-dim audio → 3D cluster",       delay: 120 },
+  { countTo: null, suffix: "AI", label: "Context",     detail: "Gemini cultural descriptions",    delay: 240 },
+  { countTo: 1,    suffix: "×",  label: "Click Save",  detail: "Save directly to your library",   delay: 360 },
+];
+
+// ---------------------------------------------------------------------------
+// Animated counter
+// ---------------------------------------------------------------------------
+
+function AnimatedStat({ countTo, suffix, delay }: { countTo: number | null; suffix: string; delay: number }) {
+  const [value, setValue] = useState(0);
+
+  useEffect(() => {
+    if (countTo === null) return;
+    const DURATION = 1400;
+    let raf: number;
+    let startTime: number | null = null;
+
+    const timer = setTimeout(() => {
+      function step(ts: number) {
+        if (!startTime) startTime = ts;
+        const progress = Math.min((ts - startTime) / DURATION, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        setValue(Math.round(eased * countTo!));
+        if (progress < 1) raf = requestAnimationFrame(step);
+      }
+      raf = requestAnimationFrame(step);
+    }, delay);
+
+    return () => { clearTimeout(timer); cancelAnimationFrame(raf); };
+  }, [countTo, delay]);
+
+  if (countTo === null) {
+    return <span className="font-black text-2xl text-white leading-none tracking-tight">{suffix}</span>;
+  }
+
+  return (
+    <span className="font-black text-2xl text-white leading-none tracking-tight">
+      {value}<span style={{ color: "#1DB954" }}>{suffix}</span>
+    </span>
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
-export default function ExplorePage() {
-  const { data: session, status } = useSession();
+export default function LandingPage() {
+  const { status } = useSession();
   const router = useRouter();
 
-  const [selectedSong, setSelectedSong] = useState<SelectedSong | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
-
-  // Controls state — Parker wires these into PointCloudViewer once ready
-  const [exploreMode, setExploreMode] = useState<ExploreMode>("manual");
-  const [pointDensity, setPointDensity] = useState(50);
-  void exploreMode;
-  void pointDensity;
-
-  const isDev = process.env.NODE_ENV === "development";
-
-  useEffect(() => {
-    if (status === "unauthenticated" && !isDev) router.replace("/landing");
-  }, [status, router, isDev]);
-
-  if (status === "loading") return null;
-  if (status === "unauthenticated" && !isDev) return null;
-
-  function onSongSelect(songId: string) {
-    setSidebarOpen(true);
-    setSelectedSong({
-      id: songId,
-      title: "Song Title",
-      artist: "Artist Name",
-      culturalDescription: "Cultural and genre context will appear here once the backend is connected.",
-    });
-  }
-
-  function closeSidebar() {
-    setSidebarOpen(false);
-    setSelectedSong(null);
-    setSaveStatus("idle");
-  }
-
-  async function saveToLikedSongs() {
-    if (!selectedSong || !session?.accessToken) return;
-    setIsSaving(true);
-    setSaveStatus("idle");
-    try {
-      const res = await fetch(`https://api.spotify.com/v1/me/tracks`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${session.accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ ids: [selectedSong.id] }),
-      });
-      setSaveStatus(res.ok ? "saved" : "error");
-    } catch {
-      setSaveStatus("error");
-    } finally {
-      setIsSaving(false);
-    }
-  }
+  const isAuthenticated = status === "authenticated";
 
   return (
-    <main className="relative w-screen h-screen bg-near-black overflow-hidden flex flex-col">
+    <div
+      className="relative w-screen h-screen overflow-hidden flex flex-col"
+      style={{ backgroundColor: "#080808" }}
+    >
+      {/* ── Diagonal background gradients ── */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: `
+            radial-gradient(ellipse 60% 65% at 90% 15%, rgba(29,185,84,0.65) 0%, rgba(29,185,84,0.20) 48%, transparent 68%),
+            radial-gradient(ellipse 58% 62% at 3% 92%, rgba(210,210,210,0.45) 0%, rgba(140,140,140,0.18) 52%, transparent 70%)
+          `,
+        }}
+      />
 
-      {/* ── Navbar ── */}
-      <Navbar />
+      {/* ── Waves background ── */}
+      <Waves
+        lineColor="rgba(29, 185, 84, 0.45)"
+        backgroundColor="transparent"
+        waveSpeedX={0.0125}
+        waveSpeedY={0.01}
+        waveAmpX={40}
+        waveAmpY={20}
+        friction={0.9}
+        tension={0.01}
+        maxCursorMove={120}
+        xGap={12}
+        yGap={36}
+        style={{ zIndex: 1 }}
+      />
 
-      {/* ── Canvas + overlays layer ── */}
-      <div className="relative flex-1 overflow-hidden">
+      {/* ── Main content ── */}
+      <main className="relative z-10 flex-1 flex items-stretch px-10 lg:px-16 py-6 gap-8">
 
-        {/* Three.js canvas — Parker mounts into this div */}
-        <div id="canvas-container" className="absolute inset-0 z-0">
-          <PointCloudViewer onPointClick={onSongSelect} />
-        </div>
-
-        {/* ── Corner green vignettes ── */}
-        <div
-          className="absolute inset-0 z-0 pointer-events-none"
-          style={{
-            background: `
-              radial-gradient(ellipse 18% 22% at 0% 0%,    rgba(29,185,84,0.20) 0%, transparent 100%),
-              radial-gradient(ellipse 18% 22% at 100% 0%,  rgba(29,185,84,0.20) 0%, transparent 100%),
-              radial-gradient(ellipse 18% 22% at 0% 100%,  rgba(29,185,84,0.20) 0%, transparent 100%),
-              radial-gradient(ellipse 18% 22% at 100% 100%,rgba(29,185,84,0.20) 0%, transparent 100%)
-            `,
-            boxShadow: "inset 0 0 60px rgba(29,185,84,0.15)",
-          }}
-        />
-
-        {/* ── Density slider — left edge, vertically centered ── */}
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 z-10">
-          <DensitySlider value={pointDensity} onChange={setPointDensity} />
-        </div>
-
-        {/* ── Mode controls — bottom center ── */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
-          <ControlsOverlay onModeChange={setExploreMode} />
-        </div>
-
-        {/* ── Sidebar — slides in from right on song select ── */}
-        <aside
-          className={`absolute top-0 right-0 h-full w-80 z-10
-                      bg-off-white border-l-4 border-black
-                      shadow-[-8px_0px_0px_0px_rgba(0,0,0,1)]
-                      transition-transform duration-300 ease-in-out flex flex-col
-                      ${sidebarOpen ? "translate-x-0" : "translate-x-full"}`}
-        >
-          {/* Sidebar header */}
-          <div className="flex items-center justify-between px-4 py-3 bg-black border-b-4 border-black">
-            <span className="font-black text-xs uppercase tracking-widest text-spotify-green">
-              Now Exploring
-            </span>
-            <button
-              onClick={closeSidebar}
-              className="font-black text-white text-lg leading-none hover:text-spotify-green transition-colors"
-              aria-label="Close sidebar"
+        {/* Left — Wordmark */}
+        <div className="flex flex-col justify-center pb-72 pl-6 flex-1 min-w-0">
+          <div className="flex items-start leading-none">
+            <span
+              className="font-black uppercase text-white leading-none tracking-tight"
+              style={{ fontSize: "clamp(3rem, 9vw, 7.5rem)" }}
             >
-              ✕
-            </button>
+              SOUND
+            </span>
+            <span
+              className="shrink-0 ml-2 mt-1"
+              style={{
+                width: "clamp(4px, 0.45vw, 7px)",
+                height: "clamp(2.5rem, 7vw, 6rem)",
+                backgroundColor: "#1DB954",
+              }}
+            />
           </div>
+          <span
+            className="font-black uppercase text-white leading-none tracking-tight"
+            style={{ fontSize: "clamp(3rem, 9vw, 7.5rem)", marginTop: "-0.05em" }}
+          >
+            GAZE
+          </span>
+          <p className="font-mono text-xs uppercase tracking-widest text-white/35 mt-4">
+            Your music universe — visualised in 3D
+          </p>
+        </div>
 
-          {/* Sidebar content */}
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-            {selectedSong ? (
-              <>
-                {/* Album art placeholder */}
-                <div className="w-full aspect-square bg-black border-4 border-black flex items-center justify-center">
-                  {selectedSong.albumArt ? (
-                    <img
-                      src={selectedSong.albumArt}
-                      alt={selectedSong.title}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-white/20 font-black text-sm uppercase tracking-widest">
-                      No Art
-                    </span>
-                  )}
-                </div>
+        {/* Right — CTA + features */}
+        <div className="flex flex-col justify-center items-center pt-72 pr-6 gap-5 w-[44rem] shrink-0">
 
-                {/* Song info */}
-                <div className="border-b-4 border-black pb-3">
-                  <h2 className="font-black text-2xl uppercase leading-tight">
-                    {selectedSong.title ?? selectedSong.id}
-                  </h2>
-                  {selectedSong.artist && (
-                    <p className="font-mono font-bold text-sm text-black/60 mt-1">
-                      {selectedSong.artist}
-                    </p>
-                  )}
-                </div>
-
-                {/* Cultural / genre description (Gemini) */}
-                {selectedSong.culturalDescription && (
-                  <div className="bg-black text-white p-3 border-4 border-black">
-                    <p className="font-mono text-xs leading-relaxed">
-                      {selectedSong.culturalDescription}
-                    </p>
-                  </div>
-                )}
-
-                {/* Save to Liked Songs */}
-                <button
-                  className="w-full neo-btn-primary text-sm mt-auto disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={saveToLikedSongs}
-                  disabled={isSaving || saveStatus === "saved" || !session?.accessToken}
-                >
-                  {isSaving
-                    ? "Saving..."
-                    : saveStatus === "saved"
-                    ? "✓ Saved to Liked Songs"
-                    : saveStatus === "error"
-                    ? "✕ Save Failed — Retry"
-                    : "♥ Save to Liked Songs"}
-                </button>
-              </>
+          <div className="flex flex-col items-center gap-3 w-full">
+            {isAuthenticated ? (
+              <button
+                onClick={() => router.push("/explore")}
+                className="font-black text-sm uppercase tracking-widest px-8 py-4
+                           border-2 transition-all hover:-translate-y-px active:translate-y-0"
+                style={{
+                  backgroundColor: "#1DB954",
+                  color: "#000",
+                  borderColor: "#1DB954",
+                  boxShadow: "0 0 0 2px #000",
+                }}
+              >
+                CONTINUE →
+              </button>
             ) : (
-              <p className="font-mono text-sm text-black/40 text-center mt-8">
-                Click a point in the universe to explore a song.
-              </p>
+              <button
+                onClick={() => signIn("spotify", { callbackUrl: "/explore" })}
+                disabled={status === "loading"}
+                className="font-black text-sm uppercase tracking-widest px-8 py-4
+                           border-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed
+                           hover:-translate-y-px active:translate-y-0"
+                style={{
+                  backgroundColor: "#1DB954",
+                  color: "#000",
+                  borderColor: "#1DB954",
+                  boxShadow: "0 0 0 2px #000",
+                }}
+              >
+                {status === "loading" ? "Connecting..." : "CONNECT SPOTIFY →"}
+              </button>
             )}
-          </div>
-        </aside>
 
-      </div>
-    </main>
+            <span className="font-mono text-xs tracking-widest text-white/30 uppercase">
+              Free account works · No credit card
+            </span>
+          </div>
+
+          {/* Feature cards */}
+          <div className="grid grid-cols-4 gap-3 w-full">
+            {FEATURES.map(({ countTo, suffix, label, detail, delay }) => (
+              <div
+                key={label}
+                className="flex flex-col gap-2 p-4 border min-h-[100px] transition-colors"
+                style={{
+                  borderColor: "rgba(29,185,84,0.40)",
+                  backgroundColor: "rgba(0,0,0,0.45)",
+                }}
+              >
+                <AnimatedStat countTo={countTo} suffix={suffix} delay={delay} />
+                <span className="font-black text-xs uppercase tracking-normal text-white leading-snug">
+                  {label}
+                </span>
+                <span className="font-mono text-xs text-white/40 leading-snug break-words">
+                  {detail}
+                </span>
+              </div>
+            ))}
+          </div>
+
+        </div>
+      </main>
+    </div>
   );
 }
