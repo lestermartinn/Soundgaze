@@ -135,6 +135,8 @@ cd backend && docker compose up -d
 **`ModuleNotFoundError: cortex`**
 The `.whl` wasn't installed. See step 3.
 
+Do **not** install `cortex-client` from PyPI; it's deprecated and pins very old `pandas` versions that fail on modern Python.
+
 **`ModuleNotFoundError` on any other package**
 Make sure your venv is activated: `source .venv/bin/activate`
 

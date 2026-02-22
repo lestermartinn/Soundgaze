@@ -12,7 +12,7 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, normalize
-from db import get_db, COLLECTION, COLLECTION_3D, song_id_to_int, batch_upsert_3d
+from db import get_db, COLLECTION, COLLECTION_3D, song_id_to_int, batch_upsert_3d, reset_collections
 from mapping import fit_umap
 
 
@@ -47,24 +47,25 @@ async def ingest_if_needed() -> None:
     Safe to call on every startup.
     """
     client = get_db()
-    count_11d = await client.count(COLLECTION)
+    count_8d = await client.count(COLLECTION)
     count_3d  = await client.count(COLLECTION_3D)
 
-    need_11d = count_11d == 0 or FORCE_REINGEST
+    need_8d = count_8d == 0 or FORCE_REINGEST
     need_3d  = count_3d  == 0 or FORCE_REINGEST
 
-    if not need_11d and not need_3d:
+    if not need_8d and not need_3d:
         logger.info(
             "Both collections populated (songs=%d, songs_3d=%d) -- skipping ingest. "
             "Set FORCE_REINGEST=true to wipe and re-ingest.",
-            count_11d, count_3d,
+            count_8d, count_3d,
         )
         return
 
-    if FORCE_REINGEST and (count_11d > 0 or count_3d > 0):
-        logger.warning("FORCE_REINGEST=true -- re-ingesting all collections.")
+    if FORCE_REINGEST and (count_8d > 0 or count_3d > 0):
+        logger.warning("FORCE_REINGEST=true -- dropping and recreating collections.")
+        await reset_collections()
 
-    # We always need the tracks list (either to upsert 11-D, or to build 3-D coords)
+    # We always need the tracks list (either to upsert 8-D, or to build 3-D coords)
     df = _load_dataset(DATASET_PATH)
     logger.info("Loaded %d raw rows.", len(df))
 
@@ -81,13 +82,13 @@ async def ingest_if_needed() -> None:
     ]
     logger.info("Normalized %d tracks (skipped %d rows).", len(tracks), len(feature_rows) - len(tracks))
 
-    # --- 11-D upsert ---
-    if need_11d:
+    # --- 8-D upsert ---
+    if need_8d:
         await _batch_upsert(tracks)
         final_count = await client.count(COLLECTION)
         logger.info("Ingest complete -- songs now contains %d vectors.", final_count)
     else:
-        logger.info("songs already has %d vectors -- skipping 11-D upsert.", count_11d)
+        logger.info("songs already has %d vectors -- skipping 11-D upsert.", count_8d)
 
     # --- 3-D reduction ---
     if need_3d:
@@ -133,6 +134,7 @@ def _load_dataset(path: str) -> pd.DataFrame:
 
 _METADATA_COLS = [
     "track_id",
+    "user_id",
     "track_name",
     "track_artist",
     "playlist_genre",
@@ -205,16 +207,24 @@ def _create_payload(features: dict, metadata: dict) -> dict | None:
     dict with:
       "track_id" : str            -- string ID used to derive the integer DB key
       "payload"  : dict           -- metadata stored alongside the vector
-      "vector"   : list[float]    -- 11-D scaled audio feature vector
+      "vector"   : list[float]    -- 8-D scaled audio feature vector
     """
     try:
+        track_id = metadata.get("track_id")
+        if pd.isna(track_id):
+            return None
+
+        def normalize(value):
+            return None if pd.isna(value) else value
+
         return {
-            "track_id": metadata["track_id"],
+            "track_id": str(track_id),
             "payload": {
-                "track_id":   metadata["track_id"],
-                "name":       metadata.get("track_name"),
-                "artist":     metadata.get("track_artist"),
-                "genre":      metadata.get("playlist_genre"),
+                "track_id": str(track_id),
+                "user_id": normalize(metadata.get("user_id")),
+                "name": normalize(metadata.get("track_name")),
+                "artist": normalize(metadata.get("track_artist")),
+                "genre": normalize(metadata.get("playlist_genre")),
             },
             "vector": [float(features[col]) for col in _FEATURE_COLS],
         }
