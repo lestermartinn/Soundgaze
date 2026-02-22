@@ -97,14 +97,14 @@ export default function LandingPage() {
       />
 
       {/* ── Main content ── */}
-      <main className="relative z-10 flex-1 flex items-stretch px-10 lg:px-16 py-6 gap-8">
+      <main className="relative z-10 flex-1 flex items-stretch px-6 md:px-10 lg:px-16 py-6 gap-8">
 
         {/* Left — Wordmark */}
-        <div className="flex flex-col justify-center pb-72 pl-6 flex-1 min-w-0">
+        <div className="flex flex-col justify-center pb-[15vh] pl-2 md:pl-6 flex-1 min-w-0">
           <div className="flex items-start leading-none">
             <span
               className="font-black uppercase text-white leading-none tracking-tight"
-              style={{ fontSize: "clamp(3rem, 9vw, 7.5rem)" }}
+              style={{ fontSize: "clamp(2.5rem, 8vw, 7.5rem)" }}
             >
               SOUND
             </span>
@@ -112,14 +112,14 @@ export default function LandingPage() {
               className="shrink-0 ml-2 mt-1"
               style={{
                 width: "clamp(4px, 0.45vw, 7px)",
-                height: "clamp(2.5rem, 7vw, 6rem)",
+                height: "clamp(2rem, 6.5vw, 6rem)",
                 backgroundColor: "#1DB954",
               }}
             />
           </div>
           <span
             className="font-black uppercase text-white leading-none tracking-tight"
-            style={{ fontSize: "clamp(3rem, 9vw, 7.5rem)", marginTop: "-0.05em" }}
+            style={{ fontSize: "clamp(2.5rem, 8vw, 7.5rem)", marginTop: "-0.05em" }}
           >
             GAZE
           </span>
@@ -129,7 +129,7 @@ export default function LandingPage() {
         </div>
 
         {/* Right — CTA + features */}
-        <div className="flex flex-col justify-center items-center pt-72 pr-6 gap-5 w-[44rem] shrink-0">
+        <div className="flex flex-col justify-center items-center pt-[15vh] pr-2 md:pr-6 gap-5 w-full max-w-[44rem] shrink-0">
 
           <div className="flex flex-col items-center gap-3 w-full">
             {isAuthenticated ? (
@@ -170,11 +170,11 @@ export default function LandingPage() {
           </div>
 
           {/* Feature cards */}
-          <div className="grid grid-cols-4 gap-3 w-full">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 w-full">
             {FEATURES.map(({ countTo, suffix, label, detail, delay }) => (
               <div
                 key={label}
-                className="flex flex-col gap-2 p-4 border min-h-[100px] transition-colors"
+                className="flex flex-col gap-2 p-3 lg:p-4 border min-h-[90px] transition-colors"
                 style={{
                   borderColor: "rgba(29,185,84,0.40)",
                   backgroundColor: "rgba(0,0,0,0.45)",
