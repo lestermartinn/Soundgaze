@@ -458,6 +458,16 @@ def _choose_weighted_candidate(candidates: list[dict], sample_temperature: float
     return rng.choices(candidates, weights=weights, k=1)[0]
 
 
+def _choose_by_rank_band(candidates: list[dict], temperature: float, rng: random.Random) -> dict:
+    if len(candidates) == 1:
+        return candidates[0]
+
+    n = len(candidates)
+    clamped = max(0.0, min(1.0, temperature))
+    rank_index = int((rng.random() ** (2.3 - 2.2 * clamped)) * (n - 1))
+    return candidates[rank_index]
+
+
 @app.get("/songs/{track_id}/walk", response_model=RandomWalkResponse)
 async def random_walk_songs(
     track_id: str,
@@ -478,13 +488,13 @@ async def random_walk_songs(
 
     rng = random.Random(random_seed)
     scaled_temperature = 0.05 + (temperature * 1.95)
-    effective_k = max(2, min(k, int(round(2 + (k - 2) * temperature))))
-    search_k = min(max(k * 4, k + 10), 500)
+    effective_k = max(2, min(k, int(round(2 + (k - 2) * (temperature ** 0.85)))))
+    search_k = min(max(k * 6, k + 20), 700)
     exploration_pool_k = max(
         effective_k,
-        min(search_k, int(round(effective_k + (search_k - effective_k) * temperature))),
+        min(search_k, int(round(effective_k + (search_k - effective_k) * (temperature ** 0.75)))),
     )
-    exploration_rate = min(0.85, temperature * temperature)
+    exploration_rate = min(0.96, temperature ** 1.35)
 
     path: list[RandomWalkStep] = [
         RandomWalkStep(
@@ -552,15 +562,23 @@ async def random_walk_songs(
         local_pool = candidates[:effective_k]
         explore_pool_end = min(len(candidates), exploration_pool_k)
         exploratory_pool = candidates[effective_k:explore_pool_end]
+        far_start = min(
+            explore_pool_end - 1,
+            max(effective_k, int(round(explore_pool_end * (0.22 + 0.63 * temperature)))),
+        )
+        far_pool = candidates[far_start:explore_pool_end] if far_start < explore_pool_end else []
 
         use_explore_pool = bool(exploratory_pool) and rng.random() < exploration_rate
         if use_explore_pool:
-            sampled_pool = exploratory_pool
+            sampled_pool = far_pool if far_pool else exploratory_pool
             exploratory_steps += 1
         else:
             sampled_pool = local_pool if local_pool else candidates[:explore_pool_end]
 
-        picked = _choose_weighted_candidate(sampled_pool, scaled_temperature, rng)
+        if use_explore_pool:
+            picked = _choose_by_rank_band(sampled_pool, temperature, rng)
+        else:
+            picked = _choose_weighted_candidate(sampled_pool, scaled_temperature, rng)
         next_track_id = str(picked.get("track_id"))
 
         if next_track_id not in song_cache:

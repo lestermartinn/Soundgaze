@@ -126,11 +126,20 @@ export async function fetchPoints(n: number, userId?: string): Promise<PointsRes
  */
 export async function fetchWalk(
   trackId: string,
-  opts: { steps?: number; temperature?: number } = {},
+  opts: {
+    steps?: number;
+    temperature?: number;
+    k?: number;
+    restartProb?: number;
+    noRepeatWindow?: number;
+  } = {},
 ): Promise<WalkResponse> {
   const params = new URLSearchParams({
     steps: String(opts.steps ?? 10),
     temperature: String(opts.temperature ?? 0.8),
+    k: String(opts.k ?? 25),
+    restart_prob: String(opts.restartProb ?? 0.1),
+    no_repeat_window: String(opts.noRepeatWindow ?? 3),
   });
   const res = await fetch(`${API_BASE}/songs/${encodeURIComponent(trackId)}/walk?${params}`);
   if (!res.ok) throw new Error(`fetchWalk failed: ${res.status}`);

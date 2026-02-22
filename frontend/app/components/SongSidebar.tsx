@@ -19,21 +19,45 @@ export interface SongData {
 interface SongSidebarProps {
   song: SongData | null;
   isOpen: boolean;
+  mode?: "manual" | "random-walk";
   onClose: () => void;
   onSkip: () => void;
+  onWalk?: (opts?: { temperature?: number }) => void;
+  isWalking?: boolean;
+  onRespawn?: () => void;
+  walkAdventurous?: number;
+  onWalkAdventurousChange?: (value: number) => void;
+  onNextStep?: () => void;
+  walkProgress?: { current: number; total: number };
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export default function SongSidebar({ song, onClose, onSkip }: SongSidebarProps) {
+export default function SongSidebar({
+  song,
+  mode = "manual",
+  onClose,
+  onSkip,
+  onWalk,
+  isWalking = false,
+  onRespawn,
+  walkAdventurous = 50,
+  onWalkAdventurousChange,
+  onNextStep,
+  walkProgress,
+}: SongSidebarProps) {
   return (
     <>
       <style>{`
         .desc-scroll::-webkit-scrollbar { width: 3px; }
         .desc-scroll::-webkit-scrollbar-track { background: transparent; }
         .desc-scroll::-webkit-scrollbar-thumb { background: rgba(29,185,84,0.4); border-radius: 2px; }
+        @keyframes walk-dot-pulse {
+          0%, 100% { transform: scale(1); opacity: 0.55; }
+          50% { transform: scale(1.45); opacity: 1; }
+        }
       `}</style>
 
       <div
@@ -141,22 +165,124 @@ export default function SongSidebar({ song, onClose, onSkip }: SongSidebarProps)
             </div>
           ) : null}
 
-          {/* Skip */}
-          <button
-            onClick={onSkip}
-            disabled={!song || song.isLoading}
-            className="w-full flex items-center justify-center gap-2 font-black text-xs
-                       uppercase tracking-widest py-2.5 border-2 transition-all
-                       hover:-translate-y-px active:translate-y-0
-                       disabled:opacity-25 disabled:cursor-not-allowed disabled:translate-y-0"
-            style={{ borderColor: "rgba(255,255,255,0.25)", color: "rgba(255,255,255,0.6)" }}
-          >
-            <svg width="12" height="11" viewBox="0 0 12 11" fill="currentColor">
-              <path d="M1 0.5L8 5.5L1 10.5V0.5Z" />
-              <rect x="9.5" y="0.5" width="2.5" height="10" rx="0.5" />
-            </svg>
-            Skip
-          </button>
+          {mode === "manual" && (
+            <button
+              onClick={onSkip}
+              disabled={!song || song.isLoading}
+              className="w-full flex items-center justify-center gap-2 font-black text-xs
+                         uppercase tracking-widest py-2.5 border-2 transition-all
+                         hover:-translate-y-px active:translate-y-0
+                         disabled:opacity-25 disabled:cursor-not-allowed disabled:translate-y-0"
+              style={{ borderColor: "rgba(255,255,255,0.25)", color: "rgba(255,255,255,0.6)" }}
+            >
+              <svg width="12" height="11" viewBox="0 0 12 11" fill="currentColor">
+                <path d="M1 0.5L8 5.5L1 10.5V0.5Z" />
+                <rect x="9.5" y="0.5" width="2.5" height="10" rx="0.5" />
+              </svg>
+              Skip
+            </button>
+          )}
+
+          {mode === "random-walk" && onWalk && (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-white/45">
+                    Adventurous
+                  </span>
+                  <span className="font-mono text-[10px] text-[#A855F7]">
+                    {walkAdventurous}%
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { label: "Local", value: 15 },
+                    { label: "Balanced", value: 50 },
+                    { label: "Wild", value: 90 },
+                  ].map((preset) => {
+                    const active = Math.abs(walkAdventurous - preset.value) <= 2;
+                    return (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() => onWalkAdventurousChange?.(preset.value)}
+                        className="font-mono text-[9px] uppercase tracking-widest py-1 border transition-all"
+                        style={{
+                          borderColor: active ? "#A855F7" : "rgba(168,85,247,0.35)",
+                          color: active ? "#A855F7" : "rgba(168,85,247,0.75)",
+                          backgroundColor: active ? "rgba(168,85,247,0.15)" : "transparent",
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={walkAdventurous}
+                  onChange={(e) => onWalkAdventurousChange?.(Number(e.target.value))}
+                  className="w-full accent-[#A855F7]"
+                />
+              </div>
+
+              <button
+                onClick={() => onWalk({ temperature: walkAdventurous / 100 })}
+                disabled={!song || song.isLoading}
+                className="w-full font-black text-xs uppercase tracking-widest py-3 px-4
+                           border-2 transition-all
+                           hover:-translate-y-px active:translate-y-0
+                           disabled:opacity-40 disabled:cursor-not-allowed disabled:translate-y-0"
+                style={{
+                  backgroundColor: isWalking ? "rgba(168,85,247,0.15)" : "transparent",
+                  borderColor: "#A855F7",
+                  color: "#A855F7",
+                  boxShadow: isWalking ? "none" : "3px 3px 0px 0px rgba(0,0,0,0.5)",
+                }}
+              >
+                {isWalking ? "Restart Listening" : "Start Listening"}
+              </button>
+
+              {isWalking && onRespawn && (
+                <button
+                  onClick={onRespawn}
+                  className="w-full font-black text-xs uppercase tracking-widest py-3 px-4
+                             border-2 transition-all
+                             hover:-translate-y-px active:translate-y-0"
+                  style={{
+                    backgroundColor: "transparent",
+                    borderColor: "rgba(168,85,247,0.5)",
+                    color: "rgba(168,85,247,0.9)",
+                    boxShadow: "3px 3px 0px 0px rgba(0,0,0,0.45)",
+                  }}
+                >
+                  Respawn To Seed
+                </button>
+              )}
+
+              {isWalking && onNextStep && (
+                <button
+                  onClick={onNextStep}
+                  className="w-full font-black text-xs uppercase tracking-widest py-3 px-4
+                             border-2 transition-all
+                             hover:-translate-y-px active:translate-y-0"
+                  style={{
+                    backgroundColor: "transparent",
+                    borderColor: "rgba(168,85,247,0.5)",
+                    color: "rgba(168,85,247,0.9)",
+                  }}
+                >
+                  Next Song ({walkProgress?.current ?? 0}/{walkProgress?.total ?? 20})
+                </button>
+              )}
+
+            </>
+          )}
 
         </div>
       </div>

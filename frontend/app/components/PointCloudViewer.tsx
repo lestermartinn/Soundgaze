@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useMemo, useCallback, useState } from "react";
+import { useRef, useMemo, useCallback, useState, useEffect } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { CameraControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -14,6 +14,7 @@ const COLOR_GLOBAL = new THREE.Color("#4a4a5a");
 const COLOR_USER = new THREE.Color("#1DB954");
 const COLOR_NEIGHBOR = new THREE.Color("#FF6B35");
 const COLOR_WALK = new THREE.Color("#A855F7");
+const COLOR_CURRENT = new THREE.Color("#FF2D2D");
 
 // ---------------------------------------------------------------------------
 // Props
@@ -24,9 +25,143 @@ export interface PointCloudViewerProps {
   userSongIds: Set<string>;
   neighborIds: Set<string>;
   walkIds: Set<string>;
+  walkActive?: boolean;
+  walkPathIds?: string[];
+  walkProgress?: number;
   coordMode: "raw" | "uniform";
   onPointClick: (point: SongPoint) => void;
   selectedId?: string | null;
+}
+
+function WalkPathOverlay({
+  globalPoints,
+  walkPathIds,
+  walkProgress = 0,
+  coordMode,
+}: {
+  globalPoints: SongPoint[];
+  walkPathIds?: string[];
+  walkProgress?: number;
+  coordMode: "raw" | "uniform";
+}) {
+  const lineRef = useRef<any>(null);
+  const headRef = useRef<THREE.Mesh>(null);
+  const nextRef = useRef<THREE.Mesh>(null);
+  const nextGlowRef = useRef<THREE.Mesh>(null);
+  const arrowRef = useRef<THREE.Mesh>(null);
+
+  const orderedPoints = useMemo(() => {
+    if (!walkPathIds || walkPathIds.length < 2) return [] as THREE.Vector3[];
+    const byId = new Map(globalPoints.map((p) => [p.track_id, p]));
+    return walkPathIds
+      .map((id) => byId.get(id))
+      .filter((p): p is SongPoint => !!p)
+      .map((p) => {
+        const xyz = coordMode === "raw" ? p.xyz_raw : p.xyz_uniform;
+        return new THREE.Vector3(xyz[0] - 0.5, xyz[1] - 0.5, xyz[2] - 0.5);
+      });
+  }, [walkPathIds, globalPoints, coordMode]);
+
+  const visibleCount = Math.min(orderedPoints.length, Math.max(1, walkProgress + 1));
+  const visiblePoints = useMemo(() => orderedPoints.slice(0, visibleCount), [orderedPoints, visibleCount]);
+  const currentPoint = visiblePoints.length > 0 ? visiblePoints[visiblePoints.length - 1] : null;
+  const nextPoint = useMemo(() => {
+    const idx = Math.max(0, (walkProgress ?? 0) + 1);
+    return idx < orderedPoints.length ? orderedPoints[idx] : null;
+  }, [orderedPoints, walkProgress]);
+  useEffect(() => {
+    if (lineRef.current) {
+      lineRef.current.computeLineDistances();
+    }
+  }, [visiblePoints]);
+
+  useFrame((state) => {
+    const t = state.clock.getElapsedTime();
+    if (lineRef.current) {
+      const material = lineRef.current.material as any;
+      material.dashOffset = -t * 0.8;
+    }
+
+    if (headRef.current && currentPoint) {
+      headRef.current.position.copy(currentPoint);
+      const pulse = 1 + 0.22 * (0.5 + 0.5 * Math.sin(t * 6));
+      headRef.current.scale.setScalar(pulse);
+    }
+
+    if (nextRef.current && nextPoint) {
+      nextRef.current.position.copy(nextPoint);
+      const pulse = 1 + 0.22 * (0.5 + 0.5 * Math.sin(t * 5.2));
+      nextRef.current.scale.setScalar(pulse);
+    }
+
+    if (nextGlowRef.current && nextPoint) {
+      nextGlowRef.current.position.copy(nextPoint);
+      const glowPulse = 1 + 0.3 * (0.5 + 0.5 * Math.sin(t * 4.1));
+      nextGlowRef.current.scale.setScalar(glowPulse);
+    }
+
+    if (arrowRef.current && currentPoint && nextPoint) {
+      const dir = new THREE.Vector3().subVectors(nextPoint, currentPoint).normalize();
+      const arrowPos = new THREE.Vector3().copy(nextPoint).addScaledVector(dir, -0.0075);
+      arrowRef.current.position.copy(arrowPos);
+      arrowRef.current.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      const arrowPulse = 1 + 0.12 * (0.5 + 0.5 * Math.sin(t * 7));
+      arrowRef.current.scale.setScalar(arrowPulse);
+      arrowRef.current.visible = true;
+    } else if (arrowRef.current) {
+      arrowRef.current.visible = false;
+    }
+  });
+
+  if (visiblePoints.length < 2) return null;
+
+  const linePositions = new Float32Array(visiblePoints.length * 3);
+  visiblePoints.forEach((p, i) => {
+    linePositions[i * 3] = p.x;
+    linePositions[i * 3 + 1] = p.y;
+    linePositions[i * 3 + 2] = p.z;
+  });
+
+  return (
+    <group>
+      <line ref={lineRef}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[linePositions, 3]} />
+        </bufferGeometry>
+        <lineDashedMaterial
+          color="#A855F7"
+          linewidth={1}
+          dashSize={0.03}
+          gapSize={0.018}
+          transparent
+          opacity={0.9}
+        />
+      </line>
+
+      <mesh ref={headRef}>
+        <sphereGeometry args={[0.0085, 16, 16]} />
+        <meshBasicMaterial color="#FF2D2D" transparent opacity={1} />
+      </mesh>
+
+      {nextPoint && (
+        <>
+          <mesh ref={nextRef}>
+            <sphereGeometry args={[0.0076, 16, 16]} />
+            <meshBasicMaterial color="#A855F7" transparent opacity={0.98} />
+          </mesh>
+          <mesh ref={nextGlowRef}>
+            <sphereGeometry args={[0.0128, 16, 16]} />
+            <meshBasicMaterial color="#C084FC" transparent opacity={0.28} />
+          </mesh>
+        </>
+      )}
+
+      <mesh ref={arrowRef}>
+        <coneGeometry args={[0.0055, 0.015, 12]} />
+        <meshBasicMaterial color="#FFC7C7" transparent opacity={0.72} />
+      </mesh>
+    </group>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -68,47 +203,16 @@ function AutoRotate({
 // Inner scene — must live inside <Canvas>
 // ---------------------------------------------------------------------------
 
-function SelectedPoint({
-  point,
-  coordMode,
-  circleTexture,
-}: {
-  point: SongPoint;
-  coordMode: "raw" | "uniform";
-  circleTexture: THREE.CanvasTexture;
-}) {
-  const xyz = coordMode === "raw" ? point.xyz_raw : point.xyz_uniform;
-  const pos = useMemo(
-    () => new Float32Array([xyz[0] - 0.5, xyz[1] - 0.5, xyz[2] - 0.5]),
-    [xyz],
-  );
-  return (
-    <points renderOrder={999} frustumCulled={false}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[pos, 3]} />
-      </bufferGeometry>
-      <pointsMaterial
-        color="red"
-        map={circleTexture}
-        alphaTest={0.5}
-        size={0.06}
-        sizeAttenuation
-        depthTest={false}
-        depthWrite={false}
-        transparent
-        opacity={1}
-      />
-    </points>
-  );
-}
-
 function PointCloud({
   globalPoints,
   userSongIds,
   neighborIds,
   walkIds,
-  coordMode,
+  walkActive,
+  walkPathIds,
+  walkProgress,
   selectedId,
+  coordMode,
   onHover,
   mouseNDC,
   hoveredRef,
@@ -121,6 +225,15 @@ function PointCloud({
   const { camera, size } = useThree();
   const tempVec = useMemo(() => new THREE.Vector3(), []);
   const circleTexture = useMemo(() => makeCircleTexture(), []);
+  const walkCurrentId = useMemo(() => {
+    if (!walkPathIds || walkPathIds.length === 0) return null;
+    const idx = Math.max(0, Math.min(walkPathIds.length - 1, walkProgress ?? 0));
+    return walkPathIds[idx] ?? null;
+  }, [walkPathIds, walkProgress]);
+  const selectedPoint = useMemo(() => {
+    if (!selectedId) return null;
+    return globalPoints.find((p) => p.track_id === selectedId) ?? null;
+  }, [globalPoints, selectedId]);
 
   const { positions, colors } = useMemo(() => {
     const pos = new Float32Array(globalPoints.length * 3);
@@ -132,10 +245,12 @@ function PointCloud({
       pos[i * 3 + 1] = xyz[1] - 0.5;
       pos[i * 3 + 2] = xyz[2] - 0.5;
 
-      const c = neighborIds.has(p.track_id)
-        ? COLOR_NEIGHBOR
+      const c = walkCurrentId === p.track_id
+        ? COLOR_CURRENT
         : walkIds.has(p.track_id)
           ? COLOR_WALK
+        : !walkActive && neighborIds.has(p.track_id)
+          ? COLOR_NEIGHBOR
           : userSongIds.has(p.track_id)
             ? COLOR_USER
             : COLOR_GLOBAL;
@@ -146,7 +261,7 @@ function PointCloud({
     });
 
     return { positions: pos, colors: col };
-  }, [globalPoints, userSongIds, neighborIds, walkIds, coordMode]);
+  }, [globalPoints, userSongIds, neighborIds, walkIds, walkActive, walkCurrentId, coordMode]);
 
   // Screen-space hover: project every point to NDC each frame and find the
   // nearest to the cursor in 2D. Immune to 3D threshold issues.
@@ -183,10 +298,6 @@ function PointCloud({
     onHover(found);
   });
 
-  const selectedPoint = selectedId
-    ? globalPoints.find((p) => p.track_id === selectedId) ?? null
-    : null;
-
   return (
     <>
       <points ref={meshRef} frustumCulled={false}>
@@ -205,12 +316,15 @@ function PointCloud({
           opacity={0.9}
         />
       </points>
-      {selectedPoint && (
-        <SelectedPoint
-          point={selectedPoint}
-          coordMode={coordMode}
-          circleTexture={circleTexture}
-        />
+      {!walkActive && selectedPoint && (
+        <mesh position={[
+          (coordMode === "raw" ? selectedPoint.xyz_raw[0] : selectedPoint.xyz_uniform[0]) - 0.5,
+          (coordMode === "raw" ? selectedPoint.xyz_raw[1] : selectedPoint.xyz_uniform[1]) - 0.5,
+          (coordMode === "raw" ? selectedPoint.xyz_raw[2] : selectedPoint.xyz_uniform[2]) - 0.5,
+        ]}>
+          <sphereGeometry args={[0.009, 16, 16]} />
+          <meshBasicMaterial color="#FF2D2D" transparent opacity={1} />
+        </mesh>
       )}
     </>
   );
@@ -221,7 +335,7 @@ function PointCloud({
 // ---------------------------------------------------------------------------
 
 export default function PointCloudViewer(props: PointCloudViewerProps) {
-  const { onPointClick, selectedId, ...rest } = props;
+  const { onPointClick, ...rest } = props;
   const [hoveredPoint, setHoveredPoint] = useState<SongPoint | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const mouseNDC = useRef<{ x: number; y: number } | null>(null);
@@ -279,10 +393,15 @@ export default function PointCloudViewer(props: PointCloudViewerProps) {
       >
         <PointCloud
           {...rest}
-          selectedId={selectedId}
           onHover={setHoveredPoint}
           mouseNDC={mouseNDC}
           hoveredRef={hoveredRef}
+        />
+        <WalkPathOverlay
+          globalPoints={rest.globalPoints}
+          walkPathIds={rest.walkPathIds}
+          walkProgress={rest.walkProgress}
+          coordMode={rest.coordMode}
         />
         <AutoRotate controlsRef={cameraControlsRef} isInteracting={isInteracting} />
         <CameraControls

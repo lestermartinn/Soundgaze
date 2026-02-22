@@ -34,6 +34,9 @@ export default function ExplorePage() {
   const [walkSteps, setWalkSteps] = useState<WalkStep[]>([]);
   const [isWalking, setIsWalking] = useState(false);
   const [walkStepIndex, setWalkStepIndex] = useState(0);
+  const [walkSeedId, setWalkSeedId] = useState<string | null>(null);
+  const [walkSeedPoint, setWalkSeedPoint] = useState<SongPoint | null>(null);
+  const [walkAdventurous, setWalkAdventurous] = useState(50);
 
   // Controls
   const [exploreMode, setExploreMode] = useState<ExploreMode>("manual");
@@ -48,6 +51,7 @@ export default function ExplorePage() {
   // Slider moving UP beyond cache size triggers a backend fetch.
   const pointCacheRef = useRef<PointsResponse | null>(null);
   const cacheUserIdRef = useRef<string | undefined>(undefined);
+  const prevModeRef = useRef<ExploreMode>("manual");
 
   // Auth guard
   useEffect(() => {
@@ -58,6 +62,18 @@ export default function ExplorePage() {
     const t = setTimeout(() => setRevealed(true), 50);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    if (prevModeRef.current === exploreMode) return;
+    prevModeRef.current = exploreMode;
+    setWalkIds(new Set());
+    setWalkPoints([]);
+    setWalkSteps([]);
+    setIsWalking(false);
+    setWalkStepIndex(0);
+    setWalkSeedId(null);
+    setWalkSeedPoint(null);
+  }, [exploreMode]);
 
   // Fetch points — debounced on pointDensity / session
   // Quadratic scale: slider 1–100 → ~10–5000 points for better high-density reach
@@ -175,14 +191,33 @@ export default function ExplorePage() {
     setWalkSteps([]);
     setIsWalking(false);
     setWalkStepIndex(0);
+    setWalkSeedId(null);
+    setWalkSeedPoint(null);
   }
 
-  async function startWalk() {
+  async function startWalk(opts?: { temperature?: number }) {
     if (!selectedSong) return;
+    const temp = Math.max(0, Math.min(1, opts?.temperature ?? walkAdventurous / 100));
+    const dynamicK = Math.round(18 + temp * 110);
+    const dynamicRestartProb = Math.max(0, 0.35 * (1 - temp));
+    const dynamicNoRepeatWindow = Math.round(2 + temp * 8);
+
+    const seedPoint = [...globalPoints, ...neighborPoints, ...walkPoints].find(
+      (p) => p.track_id === selectedSong.id,
+    ) ?? null;
+
     setIsWalking(true);
     setWalkStepIndex(0);
+    setWalkSeedId(selectedSong.id);
+    setWalkSeedPoint(seedPoint);
     try {
-      const result = await fetchWalk(selectedSong.id, { steps: 10, temperature: 0.5 });
+      const result = await fetchWalk(selectedSong.id, {
+        steps: 20,
+        temperature: temp,
+        k: dynamicK,
+        restartProb: dynamicRestartProb,
+        noRepeatWindow: dynamicNoRepeatWindow,
+      });
       const steps = result.path.slice(1);
 
       const existingIds = new Set([...globalPoints, ...neighborPoints].map((p) => p.track_id));
@@ -211,6 +246,27 @@ export default function ExplorePage() {
       setIsWalking(false);
     }
   }
+
+  async function respawnToSeed() {
+    if (!walkSeedId) return;
+    setWalkStepIndex(0);
+
+    const point = [...globalPoints, ...neighborPoints, ...walkPoints].find(
+      (p) => p.track_id === walkSeedId,
+    ) ?? walkSeedPoint;
+
+    if (point) {
+      await onSongSelect(point);
+      return;
+    }
+
+    setSidebarOpen(true);
+    setSelectedSong({ id: walkSeedId });
+  }
+
+  const walkPathIds = !walkSeedId || !isWalking
+    ? []
+    : [walkSeedId, ...walkSteps.map((s) => s.track_id)];
 
   async function nextStep() {
     if (walkStepIndex >= walkSteps.length) return;
@@ -264,6 +320,9 @@ export default function ExplorePage() {
             userSongIds={userSongIds}
             neighborIds={neighborIds}
             walkIds={walkIds}
+            walkActive={isWalking}
+            walkPathIds={walkPathIds}
+            walkProgress={walkStepIndex}
             coordMode={coordMode}
             onPointClick={onSongSelect}
             selectedId={selectedSong?.id ?? null}
@@ -313,8 +372,16 @@ export default function ExplorePage() {
           <SongSidebar
             song={selectedSong}
             isOpen={sidebarOpen}
+            mode={exploreMode}
             onClose={closeSidebar}
             onSkip={skipToNext}
+            onWalk={startWalk}
+            isWalking={isWalking}
+            walkAdventurous={walkAdventurous}
+            onWalkAdventurousChange={setWalkAdventurous}
+            onRespawn={respawnToSeed}
+            onNextStep={nextStep}
+            walkProgress={isWalking ? { current: walkStepIndex, total: walkSteps.length } : undefined}
           />
         </div>
 
