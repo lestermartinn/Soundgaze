@@ -32,10 +32,13 @@ logger = logging.getLogger(__name__)
 
 UMAP_MODEL_PATH:     str = os.getenv("UMAP_MODEL_PATH",     "data/umap_model.pkl")
 QUANTILE_MODEL_PATH: str = os.getenv("QUANTILE_MODEL_PATH", "data/quantile_model.pkl")
+RAW_NORM_PATH:       str = os.getenv("RAW_NORM_PATH",       "data/raw_norm.npz")
 
 # In-memory cache
 _reducer:    umap.UMAP | None           = None
 _quantiler:  QuantileTransformer | None = None
+_raw_min:    np.ndarray | None          = None
+_raw_max:    np.ndarray | None          = None
 
 def fit_umap(vectors: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -46,24 +49,32 @@ def fit_umap(vectors: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         vectors: np.ndarray of shape (N, 8) -- the scaled feature matrix.
 
     Returns:
-        Tuple of (raw_embedding, uniform_embedding), each shape (N, 3).
-        raw_embedding     -- direct UMAP output (accurate topology)
-        uniform_embedding -- quantile-normalized (uniform distribution)
+        Tuple of (raw_norm_embedding, uniform_embedding), each shape (N, 3).
+        raw_norm_embedding -- UMAP output min-max normalized to [0,1]³ per axis (accurate topology)
+        uniform_embedding  -- quantile-normalized to uniform [0,1]³ (uniform distribution)
     """
-    global _reducer, _quantiler
+    global _reducer, _quantiler, _raw_min, _raw_max
     logger.info("Fitting UMAP on %d vectors (this takes ~30-60 s)...", len(vectors))
 
     reducer = umap.UMAP(
         n_components=3,
-        n_neighbors=40,   
+        n_neighbors=40,
         min_dist=0.4,
         spread=3.0,
         metric="cosine",
-        n_epochs=200,     
-        random_state=42 
+        n_epochs=200,
+        random_state=42
     )
-    raw_embedding = reducer.fit_transform(vectors).astype(np.float32)  
+    raw_embedding = reducer.fit_transform(vectors).astype(np.float32)
     _reducer = reducer
+
+    # Per-axis min-max normalization → raw coords in [0, 1]³ (preserves topology).
+    raw_min = raw_embedding.min(axis=0)
+    raw_max = raw_embedding.max(axis=0)
+    raw_range = raw_max - raw_min
+    raw_range[raw_range == 0] = 1.0
+    raw_norm_embedding = ((raw_embedding - raw_min) / raw_range).astype(np.float32)
+    _raw_min, _raw_max = raw_min, raw_max
 
     # Quantile-normalize each axis independently to a uniform [0, 1] distribution.
     quantiler = QuantileTransformer(output_distribution="uniform", random_state=42)
@@ -75,9 +86,10 @@ def fit_umap(vectors: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         pickle.dump(reducer, f)
     with open(QUANTILE_MODEL_PATH, "wb") as f:
         pickle.dump(quantiler, f)
-    logger.info("UMAP + quantile models saved.")
+    np.savez(RAW_NORM_PATH, raw_min=raw_min, raw_max=raw_max)
+    logger.info("UMAP + quantile + raw-norm models saved.")
 
-    return raw_embedding, uniform_embedding
+    return raw_norm_embedding, uniform_embedding
 
 def get_reducer() -> umap.UMAP:
     """Return the cached UMAP reducer, loading from disk if needed."""
@@ -107,6 +119,39 @@ def get_quantiler() -> QuantileTransformer:
             _quantiler = pickle.load(f)
         logger.info("Loaded quantile model from '%s'.", QUANTILE_MODEL_PATH)
     return _quantiler
+
+
+def _get_raw_norm_stats() -> tuple[np.ndarray, np.ndarray]:
+    """Return (raw_min, raw_max) for per-axis normalization, loading from disk if needed."""
+    global _raw_min, _raw_max
+    if _raw_min is None or _raw_max is None:
+        if not Path(RAW_NORM_PATH).exists():
+            raise FileNotFoundError(
+                f"Raw norm stats not found at '{RAW_NORM_PATH}'. "
+                "Run ingest at least once to create it."
+            )
+        data = np.load(RAW_NORM_PATH)
+        _raw_min = data["raw_min"]
+        _raw_max = data["raw_max"]
+        logger.info("Loaded raw-norm stats from '%s'.", RAW_NORM_PATH)
+    return _raw_min, _raw_max
+
+
+def normalize_raw_coords(raw_arr: np.ndarray) -> np.ndarray:
+    """
+    Apply the same per-axis min-max normalization used during ingest to a raw UMAP output.
+
+    Args:
+        raw_arr: np.ndarray of shape (N, 3) — direct output of reducer.transform().
+
+    Returns:
+        np.ndarray of shape (N, 3) with values in [0, 1]³.
+    """
+    raw_min, raw_max = _get_raw_norm_stats()
+    raw_range = raw_max - raw_min
+    raw_range[raw_range == 0] = 1.0
+    return ((raw_arr - raw_min) / raw_range).astype(np.float32)
+
 
 def reduce_vector(vector_8d: list[float]) -> list[float]:
     """

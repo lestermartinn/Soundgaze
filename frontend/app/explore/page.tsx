@@ -19,22 +19,22 @@ export default function ExplorePage() {
   const router = useRouter();
 
   // Point cloud
-  const [globalPoints, setGlobalPoints] = useState<SongPoint[]>([]);
-  const [userSongIds, setUserSongIds]   = useState<Set<string>>(new Set());
-  const [neighborIds, setNeighborIds]   = useState<Set<string>>(new Set());
-  const [coordMode]                      = useState<"raw" | "uniform">("uniform");
+  const [globalPoints, setGlobalPoints]     = useState<SongPoint[]>([]);
+  const [neighborPoints, setNeighborPoints] = useState<SongPoint[]>([]);
+  const [userSongIds, setUserSongIds]       = useState<Set<string>>(new Set());
+  const [neighborIds, setNeighborIds]       = useState<Set<string>>(new Set());
 
   // Sidebar
   const [selectedSong, setSelectedSong] = useState<SongData | null>(null);
   const [sidebarOpen, setSidebarOpen]   = useState(false);
-  const [isSaving, setIsSaving]         = useState(false);
-  const [saveStatus, setSaveStatus]     = useState<"idle" | "saved" | "error">("idle");
 
   // Controls
   const [exploreMode, setExploreMode]   = useState<ExploreMode>("manual");
   const [revealed, setRevealed]         = useState(false);
   const [pointDensity, setPointDensity] = useState(50);
   const [topology, setTopology]         = useState<Topology>("uniform");
+  const coordMode = topology === "uniform" ? "uniform" : "raw";
+  const [isLoadingPoints, setIsLoadingPoints] = useState(false);
   void exploreMode;
 
   // Auth guard
@@ -48,18 +48,30 @@ export default function ExplorePage() {
   }, []);
 
   // Fetch points — debounced on pointDensity / session
+  // Quadratic scale: slider 1–100 → ~10–5000 points for better high-density reach
   useEffect(() => {
     const userId = (session as { spotifyId?: string } | null)?.spotifyId ?? undefined;
-    const n = Math.max(10, pointDensity * 10); // 10–1000 points
+    const t = pointDensity / 100;
+    const n = Math.min(5000, Math.max(10, Math.round(t * t * 5000)));
+    setIsLoadingPoints(true);
     const timer = setTimeout(async () => {
       try {
         const data = await fetchPoints(n, userId);
-        setGlobalPoints(data.global_sample);
-        setUserSongIds(new Set(data.user_songs.map((p) => p.track_id)));
+        const userIds = new Set(data.user_songs.map((p) => p.track_id));
+        // Merge user songs into the rendered set so they always appear in the cloud
+        const globalIds = new Set(data.global_sample.map((p) => p.track_id));
+        const merged = [
+          ...data.global_sample,
+          ...data.user_songs.filter((p) => !globalIds.has(p.track_id)),
+        ];
+        setGlobalPoints(merged);
+        setUserSongIds(userIds);
       } catch (err) {
         console.error("fetchPoints failed", err);
+      } finally {
+        setIsLoadingPoints(false);
       }
-    }, 300);
+    }, 400);
     return () => clearTimeout(timer);
   }, [pointDensity, session]);
 
@@ -72,15 +84,18 @@ export default function ExplorePage() {
 
   async function onSongSelect(point: SongPoint) {
     setSidebarOpen(true);
-    setSaveStatus("idle");
     setSelectedSong({ id: point.track_id, isLoading: true });
 
-    // Kick off neighbors + Gemini in the background (don't await yet)
-    fetchSimilar(point.track_id)
-      .then(({ songs }) => setNeighborIds(new Set(songs.map((s) => s.track_id))))
-      .catch((err) => console.error("fetchSimilar failed", err));
-
+    // Kick off neighbors + Gemini in parallel — don't block album art on either
     const geminiPromise = fetchDescription(point.name, point.artist, point.genre);
+
+    fetchSimilar(point.track_id)
+      .then(({ songs }) => {
+        const existingIds = new Set(globalPoints.map((p) => p.track_id));
+        setNeighborIds(new Set(songs.map((s) => s.track_id)));
+        setNeighborPoints(songs.filter((s) => !existingIds.has(s.track_id)));
+      })
+      .catch((err) => console.error("fetchSimilar failed", err));
 
     // Await Spotify first — it's fast (~200ms) and unblocks album art + preview
     let spotifyData = null;
@@ -117,7 +132,7 @@ export default function ExplorePage() {
     setSidebarOpen(false);
     setSelectedSong(null);
     setNeighborIds(new Set());
-    setSaveStatus("idle");
+    setNeighborPoints([]);
   }
 
   function skipToNext() {
@@ -125,27 +140,6 @@ export default function ExplorePage() {
     const currentIndex = globalPoints.findIndex((p) => p.track_id === selectedSong.id);
     const nextPoint = globalPoints[currentIndex + 1] ?? globalPoints[0];
     if (nextPoint) onSongSelect(nextPoint);
-  }
-
-  async function saveToLikedSongs() {
-    if (!selectedSong || !session?.accessToken) return;
-    setIsSaving(true);
-    setSaveStatus("idle");
-    try {
-      const res = await fetch("https://api.spotify.com/v1/me/tracks", {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${session.accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ ids: [selectedSong.id] }),
-      });
-      setSaveStatus(res.ok ? "saved" : "error");
-    } catch {
-      setSaveStatus("error");
-    } finally {
-      setIsSaving(false);
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -174,13 +168,28 @@ export default function ExplorePage() {
         {/* Three.js canvas */}
         <div className="absolute inset-0 z-0">
           <PointCloudViewer
-            globalPoints={globalPoints}
+            globalPoints={[...globalPoints, ...neighborPoints]}
             userSongIds={userSongIds}
             neighborIds={neighborIds}
             coordMode={coordMode}
             onPointClick={onSongSelect}
           />
         </div>
+
+        {/* ── Loading spinner ── */}
+        {isLoadingPoints && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+            <div
+              className="rounded-full border-2 border-transparent animate-spin"
+              style={{
+                width: 40,
+                height: 40,
+                borderTopColor: "#1DB954",
+                borderRightColor: "rgba(29,185,84,0.3)",
+              }}
+            />
+          </div>
+        )}
 
         {/* ── Corner green vignettes ── */}
         <div
@@ -224,10 +233,7 @@ export default function ExplorePage() {
             song={selectedSong}
             isOpen={sidebarOpen}
             onClose={closeSidebar}
-            onSave={saveToLikedSongs}
             onSkip={skipToNext}
-            isSaving={isSaving}
-            saveStatus={saveStatus}
           />
         </div>
 

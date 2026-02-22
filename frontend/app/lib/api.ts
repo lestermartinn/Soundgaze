@@ -29,7 +29,7 @@ export interface DescribeResponse {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // Set to true to use mock data
-const USE_PLACEHOLDERS = true;
+const USE_PLACEHOLDERS = false;
 
 // ---------------------------------------------------------------------------
 // Placeholder generators
@@ -79,16 +79,26 @@ function makePlaceholderSimilar(trackId: string, n: number): SimilarResponse {
 
 /**
  * Fetch a sample of 3D song points.
- * Backend: GET /songs/3d?n=N&user_id=...
+ * Backend: POST /songs/pool
  */
 export async function fetchPoints(n: number, userId?: string): Promise<PointsResponse> {
   if (USE_PLACEHOLDERS) return makePlaceholderPoints(n);
 
-  const params = new URLSearchParams({ n: String(n) });
-  if (userId) params.set("user_id", userId);
-  const res = await fetch(`${API_BASE}/songs/3d?${params}`);
+  const res = await fetch(`${API_BASE}/songs/pool`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: userId ?? null,
+      user_song_count: 50,
+      total_count: n,
+    }),
+  });
   if (!res.ok) throw new Error(`fetchPoints failed: ${res.status}`);
-  return res.json();
+  const data = await res.json();
+  return {
+    global_sample: data.global_songs as SongPoint[],
+    user_songs:    data.user_songs   as SongPoint[],
+  };
 }
 
 /**
