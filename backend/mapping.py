@@ -55,12 +55,12 @@ def fit_umap(vectors: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     reducer = umap.UMAP(
         n_components=3,
-        n_neighbors=40,
+        n_neighbors=15,   # reduced from 40 -- faster graph construction
         min_dist=0.4,
         spread=3.0,
         metric="cosine",
-        n_epochs=300,
-        random_state=42,
+        n_epochs=200,     # reduced from 300 -- cuts time ~33%
+        # random_state=42 -- removed: forces n_jobs=1 (single-threaded, very slow)
     )
     raw_embedding = reducer.fit_transform(vectors).astype(np.float32)  
     _reducer = reducer

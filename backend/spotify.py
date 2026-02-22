@@ -90,46 +90,41 @@ class SpotifyImporter:
     @staticmethod
     def audio_features_to_vector(audio_features: dict) -> List[float]:
         """
-        Convert Spotify audio features to our 11-D vector format.
+        Convert Spotify audio features to our 8-D vector format.
 
-        Matches the normalization in models.AudioFeatures.to_vector()
+        Matches the normalization in ingest.py _FEATURE_COLS order:
+        [danceability, energy, loudness, speechiness, instrumentalness, liveness, valence, tempo]
 
         Args:
-            audio_features: Dict from Spotify audio features endpoint
+            audio_features: Dict from Spotify/ReccoBeats audio features endpoint
 
         Returns:
-            11-element normalized float vector
+            8-element normalized float vector
         """
-        tempo = float(audio_features.get("tempo", 120))
-        energy = float(audio_features.get("energy", 0.5))
-        loudness = float(audio_features.get("loudness", -5))
-        danceability = float(audio_features.get("danceability", 0.5))
-        valence = float(audio_features.get("valence", 0.5))
-        mode = int(audio_features.get("mode", 1))
-        key = int(audio_features.get("key", 0))
-        acousticness = float(audio_features.get("acousticness", 0.5))
+        danceability     = float(audio_features.get("danceability", 0.5))
+        energy           = float(audio_features.get("energy", 0.5))
+        loudness         = float(audio_features.get("loudness", -5))
+        speechiness      = float(audio_features.get("speechiness", 0.0))
         instrumentalness = float(audio_features.get("instrumentalness", 0.0))
-        liveness = float(audio_features.get("liveness", 0.5))
-        speechiness = float(audio_features.get("speechiness", 0.0))
+        liveness         = float(audio_features.get("liveness", 0.5))
+        valence          = float(audio_features.get("valence", 0.5))
+        tempo            = float(audio_features.get("tempo", 120))
 
-        # Normalize to [0, 1] range (must match models.AudioFeatures.to_vector() exactly)
-        # NOTE: Returns exactly 11 dimensions (matches DB schema)
+        # Normalize to [0, 1] range (must match ingest.py _scale_features() exactly)
+        # NOTE: Returns exactly 8 dimensions (matches DB schema)
         vector = [
-            min(tempo / 250.0, 1.0),                    # normalize BPM to [0, 1]
-            energy,                                      # already [0, 1]
-            min((loudness + 60) / 60.0, 1.0),           # shift dB to [0, 1]
-            danceability,                                # already [0, 1]
-            valence,                                     # already [0, 1]
-            float(mode),                                 # 0 or 1
-            min(key / 11.0, 1.0),                        # normalize key to [0, 1]
-            acousticness,                                # already [0, 1]
-            instrumentalness,                            # already [0, 1]
-            liveness,                                    # already [0, 1]
-            speechiness,                                 # already [0, 1]
+            danceability,                        # already [0, 1]
+            energy,                              # already [0, 1]
+            min((loudness + 60) / 60.0, 1.0),   # shift dB to [0, 1]
+            speechiness,                         # already [0, 1]
+            instrumentalness,                    # already [0, 1]
+            liveness,                            # already [0, 1]
+            valence,                             # already [0, 1]
+            min(tempo / 250.0, 1.0),             # normalize BPM to [0, 1]
         ]
 
-        if len(vector) != 11:
-            raise ValueError(f"Vector has {len(vector)} dimensions, expected 11")
+        if len(vector) != 8:
+            raise ValueError(f"Vector has {len(vector)} dimensions, expected 8")
 
         return vector
 
