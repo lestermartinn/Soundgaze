@@ -1,88 +1,198 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import PointCloudViewer from "./components/PointCloudViewer";
+import { useSession, signIn } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import Waves from "./components/Waves";
 
-type HealthStatus = "checking" | "ok" | "error";
+// ---------------------------------------------------------------------------
+// Feature callouts
+// ---------------------------------------------------------------------------
 
-export default function HomePage() {
-  const [backendStatus, setBackendStatus] = useState<HealthStatus>("checking");
-  const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
-  const [recommendations, setRecommendations] = useState<string[]>([]);
+const FEATURES = [
+  { countTo: 50,   suffix: "M+", label: "Tracks",     detail: "Mapped in 3D space",              delay: 0   },
+  { countTo: 3,    suffix: "D",  label: "UMAP Space",  detail: "12-dim audio → 3D cluster",       delay: 120 },
+  { countTo: null, suffix: "AI", label: "Context",     detail: "Gemini cultural descriptions",    delay: 240 },
+  { countTo: 1,    suffix: "×",  label: "Click Save",  detail: "Save directly to your library",   delay: 360 },
+];
 
-  // Verify backend connection on mount
+// ---------------------------------------------------------------------------
+// Animated counter
+// ---------------------------------------------------------------------------
+
+function AnimatedStat({ countTo, suffix, delay }: { countTo: number | null; suffix: string; delay: number }) {
+  const [value, setValue] = useState(0);
+
   useEffect(() => {
-    async function checkBackend() {
-      try {
-        const res = await fetch("/api/py/health");
-        setBackendStatus(res.ok ? "ok" : "error");
-      } catch {
-        setBackendStatus("error");
-      }
-    }
-    checkBackend();
-  }, []);
+    if (countTo === null) return;
+    const DURATION = 1400;
+    let raf: number;
+    let startTime: number | null = null;
 
-  // Called when the user clicks a point in the 3D cloud
-  async function handlePointClick(songId: string) {
-    setSelectedSongId(songId);
-    setRecommendations([]);
-
-    try {
-      const res = await fetch("/api/py/songs/recommend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ song_id: songId, top_k: 5 }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setRecommendations(data.recommendations ?? []);
+    const timer = setTimeout(() => {
+      function step(ts: number) {
+        if (!startTime) startTime = ts;
+        const progress = Math.min((ts - startTime) / DURATION, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        setValue(Math.round(eased * countTo!));
+        if (progress < 1) raf = requestAnimationFrame(step);
       }
-    } catch (err) {
-      console.error("Recommendation fetch failed:", err);
-    }
+      raf = requestAnimationFrame(step);
+    }, delay);
+
+    return () => { clearTimeout(timer); cancelAnimationFrame(raf); };
+  }, [countTo, delay]);
+
+  if (countTo === null) {
+    return <span className="font-black text-2xl text-white leading-none tracking-tight">{suffix}</span>;
   }
 
   return (
-    <main className="grid grid-rows-[48px_1fr] h-screen relative overflow-hidden">
-      {/* ── Header ── */}
-      <header className="flex items-center gap-3 px-5 bg-surface border-b border-divider text-[15px] font-semibold tracking-wide">
-        <h1>Hacklytics 2025</h1>
-        <span
-          className="status-dot w-2.5 h-2.5 rounded-full transition-colors duration-300"
-          data-status={backendStatus}
-          title={`Backend: ${backendStatus}`}
-        />
-      </header>
+    <span className="font-black text-2xl text-white leading-none tracking-tight">
+      {value}<span style={{ color: "#1DB954" }}>{suffix}</span>
+    </span>
+  );
+}
 
-      {/* ── 3D Viewport ── */}
-      <section className="relative w-full h-full">
-        <PointCloudViewer onPointClick={handlePointClick} />
-      </section>
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
-      {/* ── Topological Twins sidebar ── */}
-      {selectedSongId && (
-        <aside className="absolute top-[68px] right-5 w-[260px] bg-surface border border-divider rounded-lg p-4 z-10">
-          <h2 className="text-[13px] font-bold tracking-widest uppercase text-accent mb-2.5">
-            Topological Twins
-          </h2>
-          <p className="text-xs text-muted mb-1">
-            Selected: <code className="text-primary font-mono">{selectedSongId}</code>
+export default function LandingPage() {
+  const { status } = useSession();
+  const router = useRouter();
+
+  const isAuthenticated = status === "authenticated";
+
+  return (
+    <div
+      className="relative w-screen h-screen overflow-hidden flex flex-col"
+      style={{ backgroundColor: "#080808" }}
+    >
+      {/* ── Diagonal background gradients ── */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: `
+            radial-gradient(ellipse 60% 65% at 90% 15%, rgba(29,185,84,0.65) 0%, rgba(29,185,84,0.20) 48%, transparent 68%),
+            radial-gradient(ellipse 58% 62% at 3% 92%, rgba(210,210,210,0.45) 0%, rgba(140,140,140,0.18) 52%, transparent 70%)
+          `,
+        }}
+      />
+
+      {/* ── Waves background ── */}
+      <Waves
+        lineColor="rgba(29, 185, 84, 0.45)"
+        backgroundColor="transparent"
+        waveSpeedX={0.0125}
+        waveSpeedY={0.01}
+        waveAmpX={40}
+        waveAmpY={20}
+        friction={0.9}
+        tension={0.01}
+        maxCursorMove={120}
+        xGap={12}
+        yGap={36}
+        style={{ zIndex: 1 }}
+      />
+
+      {/* ── Main content ── */}
+      <main className="relative z-10 flex-1 flex items-stretch px-10 lg:px-16 py-6 gap-8">
+
+        {/* Left — Wordmark */}
+        <div className="flex flex-col justify-center pb-72 pl-6 flex-1 min-w-0">
+          <div className="flex items-start leading-none">
+            <span
+              className="font-black uppercase text-white leading-none tracking-tight"
+              style={{ fontSize: "clamp(3rem, 9vw, 7.5rem)" }}
+            >
+              SOUND
+            </span>
+            <span
+              className="shrink-0 ml-2 mt-1"
+              style={{
+                width: "clamp(4px, 0.45vw, 7px)",
+                height: "clamp(2.5rem, 7vw, 6rem)",
+                backgroundColor: "#1DB954",
+              }}
+            />
+          </div>
+          <span
+            className="font-black uppercase text-white leading-none tracking-tight"
+            style={{ fontSize: "clamp(3rem, 9vw, 7.5rem)", marginTop: "-0.05em" }}
+          >
+            GAZE
+          </span>
+          <p className="font-mono text-xs uppercase tracking-widest text-white/35 mt-4">
+            Your music universe — visualised in 3D
           </p>
+        </div>
 
-          {recommendations.length === 0 ? (
-            <p className="text-xs text-muted">Loading…</p>
-          ) : (
-            <ul className="flex flex-col gap-1.5 mt-2">
-              {recommendations.map((id) => (
-                <li key={id}>
-                  <code className="text-xs text-primary font-mono">{id}</code>
-                </li>
-              ))}
-            </ul>
-          )}
-        </aside>
-      )}
-    </main>
+        {/* Right — CTA + features */}
+        <div className="flex flex-col justify-center items-center pt-72 pr-6 gap-5 w-[44rem] shrink-0">
+
+          <div className="flex flex-col items-center gap-3 w-full">
+            {isAuthenticated ? (
+              <button
+                onClick={() => router.push("/explore")}
+                className="font-black text-sm uppercase tracking-widest px-8 py-4
+                           border-2 transition-all hover:-translate-y-px active:translate-y-0"
+                style={{
+                  backgroundColor: "#1DB954",
+                  color: "#000",
+                  borderColor: "#1DB954",
+                  boxShadow: "0 0 0 2px #000",
+                }}
+              >
+                CONTINUE →
+              </button>
+            ) : (
+              <button
+                onClick={() => signIn("spotify", { callbackUrl: "/explore" })}
+                disabled={status === "loading"}
+                className="font-black text-sm uppercase tracking-widest px-8 py-4
+                           border-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed
+                           hover:-translate-y-px active:translate-y-0"
+                style={{
+                  backgroundColor: "#1DB954",
+                  color: "#000",
+                  borderColor: "#1DB954",
+                  boxShadow: "0 0 0 2px #000",
+                }}
+              >
+                {status === "loading" ? "Connecting..." : "CONNECT SPOTIFY →"}
+              </button>
+            )}
+
+            <span className="font-mono text-xs tracking-widest text-white/30 uppercase">
+              Free account works · No credit card
+            </span>
+          </div>
+
+          {/* Feature cards */}
+          <div className="grid grid-cols-4 gap-3 w-full">
+            {FEATURES.map(({ countTo, suffix, label, detail, delay }) => (
+              <div
+                key={label}
+                className="flex flex-col gap-2 p-4 border min-h-[100px] transition-colors"
+                style={{
+                  borderColor: "rgba(29,185,84,0.40)",
+                  backgroundColor: "rgba(0,0,0,0.45)",
+                }}
+              >
+                <AnimatedStat countTo={countTo} suffix={suffix} delay={delay} />
+                <span className="font-black text-xs uppercase tracking-normal text-white leading-snug">
+                  {label}
+                </span>
+                <span className="font-mono text-xs text-white/40 leading-snug break-words">
+                  {detail}
+                </span>
+              </div>
+            ))}
+          </div>
+
+        </div>
+      </main>
+    </div>
   );
 }
