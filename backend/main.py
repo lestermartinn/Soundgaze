@@ -18,7 +18,7 @@ logging.basicConfig(
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from db import init_db, close_db, search_similar, get_song_vector
+from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D
 from ingest import ingest_if_needed
 from models import RecommendRequest, RecommendResponse
 
@@ -45,11 +45,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ---------------------------------------------------------------------------
-# Liveness probe -- do not remove, the frontend calls this on page load
-# ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health():
@@ -81,6 +76,67 @@ async def recommend(body: RecommendRequest):
         recommendations=[r["track_id"] for r in results],
         scores=[r["score"] for r in results],
     )
+
+
+# ---------------------------------------------------------------------------
+# Debug
+# ---------------------------------------------------------------------------
+
+@app.get("/debug/songs_3d")
+async def debug_songs_3d(n: int = 5):
+    """Return n sample points from songs_3d (searches with a zero vector)."""
+    client = get_db()
+    results = await client.search(COLLECTION_3D, query=[0.0, 0.0, 0.0], top_k=n, with_payload=True, with_vectors=True)
+    return [
+        {
+            "track_id": r.payload.get("track_id"),
+            "name":     r.payload.get("name"),
+            "artist":   r.payload.get("artist"),
+            "genre":    r.payload.get("genre"),
+            "user_ids": r.payload.get("user_ids"),
+            "xyz":      list(r.vector) if r.vector else None,
+            "score":    round(r.score, 4),
+        }
+        for r in results
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Point cloud
+# ---------------------------------------------------------------------------
+
+@app.get("/songs/3d/all")
+async def get_all_songs_3d():
+    """
+    Return every point in the songs_3d collection with both coordinate sets.
+
+    Each item includes:
+      xyz_raw     -- raw UMAP coords (accurate topology)
+      xyz_uniform -- quantile-normalized coords (uniform distribution)
+      track_id, name, artist, genre
+    """
+    client = get_db()
+    total = await client.count(COLLECTION_3D)
+    if total == 0:
+        return []
+
+    results = await client.search(
+        COLLECTION_3D,
+        query=[0.0, 0.0, 0.0],
+        top_k=total,
+        with_payload=True,
+    )
+    return [
+        {
+            "track_id":   r.payload.get("track_id"),
+            "name":       r.payload.get("name"),
+            "artist":     r.payload.get("artist"),
+            "genre":      r.payload.get("genre"),
+            "xyz_raw":     r.payload.get("xyz_raw"),
+            "xyz_uniform": r.payload.get("xyz_uniform"),
+        }
+        for r in results
+    ]
 
 
 # ---------------------------------------------------------------------------

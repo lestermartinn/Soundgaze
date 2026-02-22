@@ -9,9 +9,11 @@ Skipped if the DB is already populated (set FORCE_REINGEST=true to override).
 import logging
 import math
 import os
+import numpy as np
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
-from db import get_db, COLLECTION, song_id_to_int
+from sklearn.preprocessing import MinMaxScaler, normalize
+from db import get_db, COLLECTION, COLLECTION_3D, song_id_to_int, batch_upsert_3d
+from mapping import fit_umap
 
 
 logger = logging.getLogger(__name__)
@@ -38,26 +40,31 @@ async def ingest_if_needed() -> None:
     """
     Load and store the Spotify dataset only when the DB is empty.
 
-    Safe to call on every startup -- exits early if data is already present.
+    Checks each collection independently:
+      - songs     empty → full ingest (load CSV, clean, scale, upsert 11-D)
+      - songs_3d  empty → run UMAP on existing 11-D vectors and upsert 3-D
+
+    Safe to call on every startup.
     """
-    from db import get_db, COLLECTION
-
     client = get_db()
-    count = await client.count(COLLECTION)
+    count_11d = await client.count(COLLECTION)
+    count_3d  = await client.count(COLLECTION_3D)
 
-    if count > 0 and not FORCE_REINGEST:
+    need_11d = count_11d == 0 or FORCE_REINGEST
+    need_3d  = count_3d  == 0 or FORCE_REINGEST
+
+    if not need_11d and not need_3d:
         logger.info(
-            "DB already contains %d vectors -- skipping ingest. "
+            "Both collections populated (songs=%d, songs_3d=%d) -- skipping ingest. "
             "Set FORCE_REINGEST=true to wipe and re-ingest.",
-            count,
+            count_11d, count_3d,
         )
         return
 
-    if FORCE_REINGEST and count > 0:
-        logger.warning("FORCE_REINGEST=true -- clearing existing vectors before re-ingest.")
-        # TODO: uncomment once you confirm the recreate_collection signature
-        # await client.recreate_collection(COLLECTION, dimension=DIMENSION, ...)
+    if FORCE_REINGEST and (count_11d > 0 or count_3d > 0):
+        logger.warning("FORCE_REINGEST=true -- re-ingesting all collections.")
 
+    # We always need the tracks list (either to upsert 11-D, or to build 3-D coords)
     df = _load_dataset(DATASET_PATH)
     logger.info("Loaded %d raw rows.", len(df))
 
@@ -74,10 +81,40 @@ async def ingest_if_needed() -> None:
     ]
     logger.info("Normalized %d tracks (skipped %d rows).", len(tracks), len(feature_rows) - len(tracks))
 
-    await _batch_upsert(tracks)
+    # --- 11-D upsert ---
+    if need_11d:
+        await _batch_upsert(tracks)
+        final_count = await client.count(COLLECTION)
+        logger.info("Ingest complete -- songs now contains %d vectors.", final_count)
+    else:
+        logger.info("songs already has %d vectors -- skipping 11-D upsert.", count_11d)
 
-    final_count = await client.count(COLLECTION)
-    logger.info("Ingest complete -- DB now contains %d vectors.", final_count)
+    # --- 3-D reduction ---
+    if need_3d:
+        logger.info("Running UMAP to reduce %d tracks to 3-D...", len(tracks))
+        feature_matrix = np.array([t["vector"] for t in tracks], dtype=np.float32)
+        coords_raw, coords_uniform = fit_umap(feature_matrix)  # each (N, 3)
+
+        tracks_3d = [
+            {
+                "track_id": t["track_id"],
+                "vector":   [float(coords_uniform[i, 0]), float(coords_uniform[i, 1]), float(coords_uniform[i, 2])],
+                "payload":  {
+                    **t["payload"],
+                    "user_ids":    [],
+                    "xyz_raw":     [float(coords_raw[i, 0]),     float(coords_raw[i, 1]),     float(coords_raw[i, 2])],
+                    "xyz_uniform": [float(coords_uniform[i, 0]), float(coords_uniform[i, 1]), float(coords_uniform[i, 2])],
+                },
+            }
+            for i, t in enumerate(tracks)
+        ]
+
+        await batch_upsert_3d(tracks_3d)
+
+        final_count_3d = await client.count(COLLECTION_3D)
+        logger.info("3-D ingest complete -- songs_3d now contains %d vectors.", final_count_3d)
+    else:
+        logger.info("songs_3d already has %d vectors -- skipping 3-D upsert.", count_3d)
 
 
 # ---------------------------------------------------------------------------
@@ -104,11 +141,8 @@ _METADATA_COLS = [
 _FEATURE_COLS = [
     "danceability",
     "energy",
-    "key",
     "loudness",
-    "mode",
     "speechiness",
-    "acousticness",
     "instrumentalness",
     "liveness",
     "valence",
@@ -116,39 +150,6 @@ _FEATURE_COLS = [
 ]
 
 _KEEP_COLS = _METADATA_COLS + _FEATURE_COLS
-
-# Helper function to fill key if value is -1 (no key detected)
-def _impute_key(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Replace key == -1 (undetected) with an imputed integer in [0, 11].
-
-    Strategy: per-genre mode, falling back to global mode.
-    """
-    unknown_mask = df["key"] == -1
-    n_unknown = unknown_mask.sum()
-    if n_unknown == 0:
-        return df
-
-    # Treat -1 as NaN so mode() ignores it
-    df["key"] = df["key"].where(df["key"] != -1, other=pd.NA)
-
-    global_mode = int(df["key"].mode().iloc[0])
-
-    def genre_mode(group: pd.Series) -> pd.Series:
-        valid = group.dropna()
-        fill = int(valid.mode().iloc[0]) if not valid.empty else global_mode
-        return group.fillna(fill)
-
-    if "playlist_genre" in df.columns:
-        df["key"] = df.groupby("playlist_genre", group_keys=False)["key"].apply(genre_mode)
-
-    # Any still-NaN rows (e.g. genre also missing) get the global mode
-    df["key"] = df["key"].fillna(global_mode).astype(float)
-
-    logger.info("Imputed key for %d rows (per-genre mode, global fallback=%d).", n_unknown, global_mode)
-    return df
-
-
 def _clean(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Clean the raw DataFrame and split into two aligned DataFrames.
@@ -166,7 +167,6 @@ def _clean(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = df[[c for c in _KEEP_COLS if c in df.columns]].copy()
     df = df.dropna(subset=[c for c in _FEATURE_COLS if c in df.columns])
     df = df.drop_duplicates(subset=["track_id"])
-    df = _impute_key(df)
     df = df.reset_index(drop=True)
 
     logger.info("Cleaned %d rows. %d rows remaining.", original_size - len(df), len(df))
@@ -183,12 +183,12 @@ def _clean(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def _scale_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Min-max scale every feature column to [0, 1] so each has equal weight in
-    the vector embedding. Fit is done on the full dataset (not per-row).
+    Min-max scale every feature column to [0, 1] (equal weight per feature),
+    then L2-normalize each row to unit magnitude (consistent with cosine similarity).
     """
-    scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(df[_FEATURE_COLS])
-    return pd.DataFrame(scaled, columns=_FEATURE_COLS, index=df.index)
+    scaled = MinMaxScaler().fit_transform(df[_FEATURE_COLS])
+    unit   = normalize(scaled, norm="l2")
+    return pd.DataFrame(unit, columns=_FEATURE_COLS, index=df.index)
 
 
 # ---------------------------------------------------------------------------
