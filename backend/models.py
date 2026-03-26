@@ -166,5 +166,4 @@ class RandomWalkResponse(BaseModel):
     exploratory_steps: int
     temperature: float
     restart_prob: float
-    no_repeat_window: int
     path: List[RandomWalkStep]

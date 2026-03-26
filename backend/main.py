@@ -15,7 +15,6 @@ import random
 from contextlib import asynccontextmanager
 from typing import Any
 
-import numpy as np
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -33,7 +32,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import init_db, close_db, search_similar, get_song_vector, get_db, COLLECTION_3D, sample_song_pool, upsert_song, upsert_song_3d, get_song, song_id_to_int
-from mapping import get_reducer, get_quantiler, normalize_raw_coords
+from mapping import reduce_vector
 from ingest import ingest_if_needed
 from models import (
     RecommendRequest,
@@ -130,12 +129,11 @@ async def recommend(body: RecommendRequest):
 
 @app.post("/songs/pool", response_model=SongPoolResponse)
 async def song_pool(body: SongPoolRequest):
-    """Return up to 1000 points with new-user fallback, enriched with 3D coords.
+    """Return a sample of 3D song points for the point cloud.
 
     - If user_id has songs in DB, include personal songs + random global songs.
-    - If user_id is new or omitted (no Spotify link), return random songs so UI still renders.
-    - Each song is enriched with xyz_raw/xyz_uniform from COLLECTION_3D; songs
-      without a 3D record are dropped.
+    - If user_id is new or omitted, return random global songs so the UI still renders.
+    - xyz_raw/xyz_uniform come directly from COLLECTION_3D — no separate enrich pass.
     """
     sampled = await sample_song_pool(
         user_id=body.user_id,
@@ -143,28 +141,15 @@ async def song_pool(body: SongPoolRequest):
         total_count=body.total_count,
     )
 
-    client = get_db()
+    def is_valid(s: dict) -> bool:
+        xyz_raw = s.get("xyz_raw")
+        xyz_uniform = s.get("xyz_uniform")
+        if not xyz_raw or not xyz_uniform:
+            return False
+        return all(math.isfinite(v) for v in xyz_raw + xyz_uniform)
 
-    async def enrich(song: dict) -> dict | None:
-        try:
-            _, pay_3d = await client.get(COLLECTION_3D, id=song_id_to_int(song["track_id"]))
-            p = pay_3d or {}
-            xyz_raw     = p.get("xyz_raw")
-            xyz_uniform = p.get("xyz_uniform")
-            if not xyz_raw or not xyz_uniform:
-                return None
-            if not all(math.isfinite(v) for v in xyz_raw + xyz_uniform):
-                return None
-            return {**song, "xyz_raw": xyz_raw, "xyz_uniform": xyz_uniform}
-        except Exception:
-            return None
-
-    all_songs    = sampled["user_songs"] + sampled["global_songs"]
-    n_user       = len(sampled["user_songs"])
-    enriched_all = await asyncio.gather(*[enrich(s) for s in all_songs])
-
-    enriched_user   = [s for s in enriched_all[:n_user]  if s is not None]
-    enriched_global = [s for s in enriched_all[n_user:]  if s is not None]
+    enriched_user   = [s for s in sampled["user_songs"]   if is_valid(s)]
+    enriched_global = [s for s in sampled["global_songs"] if is_valid(s)]
 
     return SongPoolResponse(
         user_songs=enriched_user,
@@ -475,7 +460,6 @@ async def random_walk_songs(
     k: int = Query(20, ge=2, le=200),
     temperature: float = Query(0.5, ge=0.0, le=1.0),
     restart_prob: float = Query(0.1, ge=0.0, le=1.0),
-    no_repeat_window: int = Query(3, ge=1, le=50),
     random_seed: int | None = Query(None),
 ) -> RandomWalkResponse:
     seed_song = await get_song(track_id)
@@ -512,6 +496,7 @@ async def random_walk_songs(
     current_track_id = track_id
     current_vector = list(seed_vector)
     exploratory_steps = 0
+    visited_ids: set[str] = {track_id}
 
     for step_idx in range(1, steps + 1):
         restarted = False
@@ -521,7 +506,6 @@ async def random_walk_songs(
             restarted = True
 
         similar = await search_similar(query_vector=current_vector, top_k=search_k)
-        recent_window = {item.track_id for item in path[max(0, len(path) - no_repeat_window):]}
 
         candidates: list[dict] = []
         seen_ids: set[str] = set()
@@ -533,7 +517,7 @@ async def random_walk_songs(
                 continue
             if candidate_id in seen_ids:
                 continue
-            if candidate_id in recent_window:
+            if candidate_id in visited_ids:
                 continue
 
             seen_ids.add(candidate_id)
@@ -541,15 +525,13 @@ async def random_walk_songs(
             if len(candidates) >= candidate_limit:
                 break
 
+        # Fallback: neighborhood exhausted — relax to just excluding current song
         if not candidates:
-            immediate_previous = path[-2].track_id if len(path) >= 2 else None
             for item in similar:
                 candidate_id = str(item.get("track_id", "")).strip()
                 if not candidate_id or candidate_id == current_track_id:
                     continue
                 if candidate_id in seen_ids:
-                    continue
-                if immediate_previous and candidate_id == immediate_previous:
                     continue
                 seen_ids.add(candidate_id)
                 candidates.append(item)
@@ -599,6 +581,8 @@ async def random_walk_songs(
             )
         )
 
+        visited_ids.add(next_track_id)
+
         next_vector = next_song.get("vector") if next_song else None
         if not next_vector:
             break
@@ -618,7 +602,20 @@ async def random_walk_songs(
             return tid, None, None
 
     xyz_results = await asyncio.gather(*[_fetch_xyz(s.track_id) for s in path])
-    xyz_map = {tid: (raw, uni) for tid, raw, uni in xyz_results}
+    xyz_map: dict[str, tuple[list | None, list | None]] = {tid: (raw, uni) for tid, raw, uni in xyz_results}
+
+    # Fallback: compute xyz on-the-fly for steps missing from songs_3d
+    for tid, (raw, uni) in list(xyz_map.items()):
+        if raw and uni:
+            continue
+        cached = song_cache.get(tid)
+        vec = cached.get("vector") if cached else None
+        if not vec:
+            continue
+        try:
+            xyz_map[tid] = reduce_vector(vec)
+        except Exception:
+            pass
 
     path = [
         s.model_copy(update={
@@ -639,7 +636,6 @@ async def random_walk_songs(
         exploratory_steps=exploratory_steps,
         temperature=temperature,
         restart_prob=restart_prob,
-        no_repeat_window=no_repeat_window,
         path=path,
     )
 
@@ -692,11 +688,7 @@ async def get_spotify_top_frequent(body: SpotifyImportRequest):
                     pass
 
                 if not xyz_raw or not xyz_uniform:
-                    arr         = np.array([vector], dtype=np.float32)
-                    raw_arr     = get_reducer().transform(arr)
-                    uni_arr     = get_quantiler().transform(raw_arr)
-                    xyz_raw     = [float(v) for v in raw_arr[0]]
-                    xyz_uniform = [float(v) for v in uni_arr[0]]
+                    xyz_raw, xyz_uniform = reduce_vector(vector)
 
                 track["xyz_raw"] = xyz_raw  # store back for response
                 track["xyz_uniform"] = xyz_uniform

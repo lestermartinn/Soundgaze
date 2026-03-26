@@ -1,0 +1,3 @@
+method,trustworthiness,knn_recall,silhouette,time_s
+UMAP,0.954,0.2666,0.2206,24.4
+TriMAP,0.9056,0.1799,0.0345,9.7

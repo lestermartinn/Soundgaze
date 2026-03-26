@@ -1,0 +1,2 @@
+method,n_tracks,pca_variance,trust,recall_at_10,delta_recall,umap_fit_sec,phase5_recall,phase5_trust
+fma_rich_518D_pca32_umap3D,49598,95.04,0.8689,0.0618,-0.2052,46.7,0.267,0.954

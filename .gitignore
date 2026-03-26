@@ -21,6 +21,9 @@ backend/data/
 HACKLYTICS_CC_CONTEXT.md
 CLAUDE.md
 
+# Analysis 
+analysis/data/
+
 # macOS
 .DS_Store
 

@@ -11,7 +11,7 @@ export interface SongData {
   album?: string;
   albumArt?: string;
   previewUrl?: string | null;
-  culturalDescription?: string;
+  description?: string;
   isLoading?: boolean;
   isDescriptionLoading?: boolean;
 }
@@ -151,7 +151,7 @@ export default function SongSidebar({
               <div className="h-2.5 w-5/6 rounded animate-pulse" style={{ backgroundColor: "#1a1a1a" }} />
               <div className="h-2.5 w-4/6 rounded animate-pulse" style={{ backgroundColor: "#1a1a1a" }} />
             </div>
-          ) : song?.culturalDescription ? (
+          ) : song?.description ? (
             <div
               className="p-3"
               style={{ backgroundColor: "#111", borderLeft: "2px solid #1DB954" }}
@@ -160,7 +160,7 @@ export default function SongSidebar({
                 className="desc-scroll font-mono text-xs text-white/55 leading-relaxed overflow-y-auto pr-1"
                 style={{ maxHeight: "100px" }}
               >
-                {song.culturalDescription}
+                {song.description}
               </p>
             </div>
           ) : null}

@@ -16,6 +16,7 @@ DB setup (one-time per machine):
 
 import hashlib
 import logging
+import math
 import os
 import random
 from collections import defaultdict
@@ -212,10 +213,13 @@ async def sample_song_pool(
 ) -> dict[str, object]:
     """Sample random songs with user-aware fallback.
 
+    Searches COLLECTION_3D directly so xyz_raw/xyz_uniform are already in the
+    payload — no separate enrich pass needed.
+
     Behavior:
-      - If user_id is provided, try to include up to user_song_count songs for that user.
-      - Fill the remaining slots with random global songs (user_id is null).
-      - If user has no songs (new user) or user_id is omitted, return random global songs.
+      - If user_id is provided, include up to user_song_count songs for that user.
+      - Fill remaining slots with random global songs (no user_ids).
+      - If user has no songs or user_id is omitted, return random global songs.
     """
     client = get_db()
     if total_count <= 0:
@@ -227,6 +231,7 @@ async def sample_song_pool(
 
     desired_user_count = min(max(user_song_count, 0), total_count) if user_id else 0
 
+    # ── User songs: look up directly from COLLECTION_3D ──────────────────────
     selected_user: list[dict] = []
     selected_user_ids: set[str] = set()
     if user_id:
@@ -235,34 +240,55 @@ async def sample_song_pool(
         for track_id in indexed_track_ids:
             if len(selected_user) >= desired_user_count:
                 break
-            song = await _get_song_record(track_id)
-            if song is None:
-                continue
-            if user_id in song.get("user_ids", []):
+            try:
+                _, pay = await client.get(COLLECTION_3D, id=song_id_to_int(track_id))
+                pay = pay or {}
+                xyz_raw = pay.get("xyz_raw")
+                xyz_uniform = pay.get("xyz_uniform")
+                if not xyz_raw or not xyz_uniform:
+                    continue
+                u_ids = _coerce_user_ids(pay.get("user_ids"))
+                if user_id not in u_ids:
+                    continue
                 selected_user.append({
-                    "track_id": song["track_id"],
-                    "name": song.get("name"),
-                    "artist": song.get("artist"),
-                    "genre": song.get("genre"),
-                    "user_id": song.get("user_id"),
-                    "user_ids": song.get("user_ids", []),
+                    "track_id": str(pay.get("track_id", track_id)),
+                    "name": pay.get("name"),
+                    "artist": pay.get("artist"),
+                    "genre": pay.get("genre"),
+                    "xyz_raw": xyz_raw,
+                    "xyz_uniform": xyz_uniform,
+                    "user_id": u_ids[0] if u_ids else None,
+                    "user_ids": u_ids,
                 })
-                selected_user_ids.add(song["track_id"])
+                selected_user_ids.add(track_id)
+            except Exception:
+                continue
 
+    # ── Global pool: random searches on COLLECTION_3D ────────────────────────
     unique_by_track_id: dict[str, dict] = {}
     attempts = 0
     max_attempts = 120
-    top_k_per_attempt = min(max(total_count, 300), 1000)
+    # Small top_k + many diverse directions = uniform coverage.
+    # Large top_k with few directions creates visible directional streaks.
+    top_k_per_attempt = max(total_count // 10, 100)
 
     while attempts < max_attempts:
         attempts += 1
-        query_vector = [random.random() for _ in range(DIMENSION)]
-        results = await client.search(COLLECTION, query=query_vector, top_k=top_k_per_attempt, with_payload=True)
+        # Gaussian-normalized vector uniformly distributed on the positive-octant
+        # unit sphere — avoids the directional bias of random [0,1]³ vectors.
+        raw = [abs(random.gauss(0, 1)) + 1e-9 for _ in range(DIMENSION_3D)]
+        norm = math.sqrt(sum(x * x for x in raw))
+        query_vector = [x / norm for x in raw]
+        results = await client.search(COLLECTION_3D, query=query_vector, top_k=top_k_per_attempt, with_payload=True)
 
         for r in results:
             payload = r.payload or {}
             track_id = str(payload.get("track_id", r.id))
             if track_id not in unique_by_track_id:
+                xyz_raw = payload.get("xyz_raw")
+                xyz_uniform = payload.get("xyz_uniform")
+                if not xyz_raw or not xyz_uniform:
+                    continue
                 payload_user_ids = _coerce_user_ids(payload.get("user_ids"))
                 payload_user_id = _coerce_user_id(payload.get("user_id"))
                 if payload_user_id and payload_user_id not in payload_user_ids:
@@ -273,21 +299,22 @@ async def sample_song_pool(
                     "name": payload.get("name"),
                     "artist": payload.get("artist"),
                     "genre": payload.get("genre"),
+                    "xyz_raw": xyz_raw,
+                    "xyz_uniform": xyz_uniform,
                     "user_id": payload_user_ids[0] if payload_user_ids else None,
                     "user_ids": payload_user_ids,
                 }
                 _add_user_song_index(track_id, payload_user_ids)
 
-        # Stop early once we have a healthy candidate pool.
-        if len(unique_by_track_id) >= max(total_count * 5, 3000):
+        if len(unique_by_track_id) >= max(total_count * 2, 2000):
             break
 
     songs = list(unique_by_track_id.values())
     random.shuffle(songs)
 
     user_songs_all = [s for s in songs if user_id and user_id in s.get("user_ids", []) and s["track_id"] not in selected_user_ids]
-    global_songs_all = [s for s in songs if s["user_id"] is None]
-    other_user_songs = [s for s in songs if s["user_id"] is not None and (not user_id or user_id not in s.get("user_ids", []))]
+    global_songs_all = [s for s in songs if not s.get("user_ids")]
+    other_user_songs = [s for s in songs if s.get("user_ids") and (not user_id or user_id not in s.get("user_ids", []))]
 
     needed_user = max(0, desired_user_count - len(selected_user))
     if needed_user > 0 and user_songs_all:
@@ -297,7 +324,6 @@ async def sample_song_pool(
     selected_global = random.sample(global_songs_all, min(remaining, len(global_songs_all)))
     remaining -= len(selected_global)
 
-    # Fallback if global pool is smaller than requested total.
     if remaining > 0 and other_user_songs:
         selected_global.extend(random.sample(other_user_songs, min(remaining, len(other_user_songs))))
 

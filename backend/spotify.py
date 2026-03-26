@@ -27,27 +27,25 @@ logger = logging.getLogger(__name__)
 
 
 async def fetch_reccobeats_audio_features(track_ids: list[str]) -> list[dict | None]:
-    """Fetch audio features from ReccoBeats in small batches of 5."""
-    results = []
-    
+    """Fetch audio features from ReccoBeats in batches of 40, all chunks concurrent."""
+    chunks = [track_ids[i:i + 40] for i in range(0, len(track_ids), 40)]
+
+    async def fetch_chunk(client: httpx.AsyncClient, chunk: list[str]) -> list[dict | None]:
+        ids_param = ",".join(chunk)
+        url = f"https://api.reccobeats.com/v1/audio-features?ids={ids_param}"
+        try:
+            r = await client.get(url)
+            r.raise_for_status()
+            data = r.json()
+            return data.get("content", [None] * len(chunk))
+        except Exception as e:
+            logger.warning(f"ReccoBeats chunk failed: {e}")
+            return [None] * len(chunk)
+
     async with httpx.AsyncClient(timeout=10.0) as client:
-        for i in range(0, len(track_ids), 5):
-            chunk = track_ids[i:i + 5]
-            ids_param = ",".join(chunk)
-            url = f"https://api.reccobeats.com/v1/audio-features?ids={ids_param}"
-            
-            try:
-                r = await client.get(url)
-                print(f"ReccoBeats status: {r.status_code}, response: {r.text[:200]}")
-                r.raise_for_status()
-                data = r.json()
-                chunk_results = data.get("content", [None] * len(chunk))
-                results.extend(chunk_results)
-            except Exception as e:
-                logger.warning(f"ReccoBeats chunk failed: {e}")
-                results.extend([None] * len(chunk))
-    
-    return results
+        chunk_results = await asyncio.gather(*(fetch_chunk(client, c) for c in chunks))
+
+    return [item for chunk in chunk_results for item in chunk]
 
 
 class SpotifyImporter:

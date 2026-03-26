@@ -20,5 +20,10 @@ google-genai>=1.0.0
 # ML / dimensionality reduction
 pandas>=2.2.0
 numpy>=1.26.0
-umap-learn>=0.5.6
+umap-learn[parametric_umap]>=0.5.6
 scikit-learn>=1.5.0
+pacmap>=0.7.0,<0.9
+
+# Analysis / visualisation
+matplotlib>=3.9.0
+seaborn>=0.13.0
