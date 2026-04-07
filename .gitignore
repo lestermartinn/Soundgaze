@@ -20,7 +20,17 @@ backend/data/
 # Context files
 HACKLYTICS_CC_CONTEXT.md
 CLAUDE.md
+ML_Project_Proposal_Detailed.txt
+ML_Project_Proposal.pdf
+ML_Project_Proposal.txt
+
+# Build artifacts
+frontend/tsconfig.tsbuildinfo
+
+# Local config
+frontend/.mcp.json
 
 # macOS
 .DS_Store
+**/.DS_Store
 

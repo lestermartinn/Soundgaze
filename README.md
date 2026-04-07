@@ -9,6 +9,12 @@ Explore music as a 3D universe. Soundgaze maps tracks into a point cloud, lets u
 - `backend/docker-compose.yml`: local Actian VectorAI DB container.
 - `backend/data/`: dataset + persisted vector DB files + saved UMAP artifacts.
 
+## Video Demo
+https://www.youtube.com/watch?v=NxMZLuyWOTQ
+
+## DevPost
+https://devpost.com/software/soundgaze
+
 ## Architecture
 
 - **Frontend**: Next.js + React + Tailwind + `@react-three/fiber` / `three`.
