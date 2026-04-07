@@ -1,0 +1,3 @@
+method,recall_at_10,delta
+baseline_3d_euclidean,0.2,0.0
+local_scaling_3d,0.1974,-0.0026

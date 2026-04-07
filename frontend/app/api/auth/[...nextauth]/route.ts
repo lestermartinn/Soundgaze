@@ -58,18 +58,22 @@ const handler = NextAuth({
         token.spotifyId = (profile as { id?: string }).id;
       }
 
-      // Fire-and-forget sync on fresh Spotify login
+      // Await sync on fresh Spotify login so user songs are in DB before explore loads
       if (account?.access_token && token.spotifyId) {
         const apiBase = process.env.API_BASE ?? "http://localhost:8000";
-        fetch(`${apiBase}/songs/spotify/sync`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: token.spotifyId,
-            access_token: account.access_token,
-            limit: 50,
-          }),
-        }).catch((err) => console.error("[sync] Spotify library sync failed:", err));
+        try {
+          await fetch(`${apiBase}/songs/spotify/top-frequent`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: token.spotifyId,
+              access_token: account.access_token,
+              limit: 50,
+            }),
+          });
+        } catch (err) {
+          console.error("[sync] Spotify library sync failed:", err);
+        }
       }
 
       if (Date.now() < (token.accessTokenExpires as number)) {

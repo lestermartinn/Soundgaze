@@ -1,0 +1,5 @@
+method,trustworthiness,knn_recall,silhouette,time_s
+PCA,0.8873,0.1422,-0.0701,0.0
+UMAP,0.9444,0.3429,-0.0523,27.0
+tSNE,0.9896,0.4741,-0.0498,77.8
+PaCMAP,0.9339,0.2514,-0.0683,7.1

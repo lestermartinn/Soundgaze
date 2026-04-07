@@ -30,6 +30,9 @@ frontend/tsconfig.tsbuildinfo
 # Local config
 frontend/.mcp.json
 
+# Analysis 
+analysis/data/
+
 # macOS
 .DS_Store
 **/.DS_Store

@@ -153,17 +153,20 @@ def normalize_raw_coords(raw_arr: np.ndarray) -> np.ndarray:
     return ((raw_arr - raw_min) / raw_range).astype(np.float32)
 
 
-def reduce_vector(vector_8d: list[float]) -> list[float]:
+def reduce_vector(vector_8d: list[float]) -> tuple[list[float], list[float]]:
     """
-    Project a single 8-D vector into the 3-D UMAP space with quantile normalization.
+    Project a single 8-D vector into 3-D UMAP space.
 
     Args:
         vector_8d: Scaled 8-D audio feature vector.
 
     Returns:
-        [x, y, z] as plain Python floats, consistent with songs_3d.
+        (xyz_raw, xyz_uniform) — both as plain Python float lists.
+        xyz_raw is min-max normalized to [0,1]³ (accurate topology).
+        xyz_uniform is quantile-normalized to uniform [0,1]³.
     """
     arr = np.array([vector_8d], dtype=np.float32)
-    raw = get_reducer().transform(arr)          # (1, 3)
-    uniform = get_quantiler().transform(raw)    # (1, 3)
-    return [float(v) for v in uniform[0]]
+    raw = get_reducer().transform(arr)                      # (1, 3)
+    xyz_raw = [float(v) for v in normalize_raw_coords(raw)[0]]
+    xyz_uniform = [float(v) for v in get_quantiler().transform(raw)[0]]
+    return xyz_raw, xyz_uniform

@@ -1,0 +1,14 @@
+name,feature_set,n_features,genre_included,trustworthiness,knn_recall,silhouette,time_s
+baseline,"danceability, energy, loudness, speechiness, instrumentalness, liveness, valence, tempo",8,False,0.9444,0.3429,-0.0523,23.2
+baseline+genre,"danceability, energy, loudness, speechiness, instrumentalness, liveness, valence, tempo",8,True,0.9394,0.2298,0.7436,17.5
+loo_no_danceability,"energy, loudness, speechiness, instrumentalness, liveness, valence, tempo",7,False,0.92,0.2811,-0.0551,17.1
+loo_no_energy,"danceability, loudness, speechiness, instrumentalness, liveness, valence, tempo",7,False,0.9214,0.2718,-0.05,17.1
+loo_no_loudness,"danceability, energy, speechiness, instrumentalness, liveness, valence, tempo",7,False,0.9421,0.324,-0.0493,17.1
+loo_no_speechiness,"danceability, energy, loudness, instrumentalness, liveness, valence, tempo",7,False,0.9373,0.3123,-0.0567,17.1
+loo_no_instrumentalness,"danceability, energy, loudness, speechiness, liveness, valence, tempo",7,False,0.8733,0.2752,-0.052,16.9
+loo_no_liveness,"danceability, energy, loudness, speechiness, instrumentalness, valence, tempo",7,False,0.9223,0.2936,-0.0491,17.3
+loo_no_valence,"danceability, energy, loudness, speechiness, instrumentalness, liveness, tempo",7,False,0.8632,0.2168,-0.0545,17.2
+loo_no_tempo,"danceability, energy, loudness, speechiness, instrumentalness, liveness, valence",7,False,0.9428,0.3156,-0.0518,17.3
+swap_loudness_acou,"danceability, energy, speechiness, instrumentalness, liveness, valence, tempo, acousticness",8,False,0.9146,0.2198,-0.0519,17.8
+add_acousticness,"danceability, energy, loudness, speechiness, instrumentalness, liveness, valence, tempo, acousticness",9,False,0.9188,0.2282,-0.0534,17.2
+loo_no_loudness+genre,"danceability, energy, speechiness, instrumentalness, liveness, valence, tempo",7,True,0.9378,0.226,0.7361,17.4

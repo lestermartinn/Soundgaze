@@ -1,0 +1,2 @@
+method,n_tracks,trust,recall_at_10,umap_recall,umap_trust,fit_sec
+fma_rich_518D_pca213_tsne3D,49598,0.9281,0.2744,0.0618,0.8689,403.6

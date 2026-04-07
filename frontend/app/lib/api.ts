@@ -131,7 +131,6 @@ export async function fetchWalk(
     temperature?: number;
     k?: number;
     restartProb?: number;
-    noRepeatWindow?: number;
   } = {},
 ): Promise<WalkResponse> {
   const params = new URLSearchParams({
@@ -139,7 +138,6 @@ export async function fetchWalk(
     temperature: String(opts.temperature ?? 0.8),
     k: String(opts.k ?? 25),
     restart_prob: String(opts.restartProb ?? 0.1),
-    no_repeat_window: String(opts.noRepeatWindow ?? 3),
   });
   const res = await fetch(`${API_BASE}/songs/${encodeURIComponent(trackId)}/walk?${params}`);
   if (!res.ok) throw new Error(`fetchWalk failed: ${res.status}`);
